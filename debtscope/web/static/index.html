@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Debtscope · 债镜</title>
+<link rel="stylesheet" href="/static/styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='42' cy='42' r='26' fill='none' stroke='%2339c5cf' stroke-width='10'/><line x1='62' y1='62' x2='88' y2='88' stroke='%2339c5cf' stroke-width='12' stroke-linecap='round'/></svg>">
+</head>
+<body>
+
+<!-- ============ VIEW 1: model onboarding ============ -->
+<div class="onboarding" id="view-onboarding" hidden>
+  <div class="ob-inner">
+    <div class="ob-brand">
+      <svg width="34" height="34" viewBox="0 0 100 100" aria-hidden="true">
+        <circle cx="42" cy="42" r="26" fill="none" stroke="#39c5cf" stroke-width="9"/>
+        <line x1="61" y1="61" x2="88" y2="88" stroke="#39c5cf" stroke-width="11" stroke-linecap="round"/>
+      </svg>
+      <div>
+        <div class="brand-name">Debtscope <span class="brand-cn">债镜</span></div>
+        <div class="brand-sub">AI 驱动的代码技术债看板</div>
+      </div>
+    </div>
+
+    <ol class="steps">
+      <li class="active">1 · 连接模型</li>
+      <li>2 · 选择项目</li>
+      <li>3 · 初始化监控</li>
+    </ol>
+
+    <div class="ob-card">
+      <h2>先连接模型</h2>
+      <p class="muted">模型用于废弃代码 AI 精判、框架隐式入口识别，以及把自然语言变成自定义指标。
+        Key 仅保存在本机 <code>~/.debtscope/config.json</code>（权限 600），代码与 Key 都不会上传到第三方。</p>
+      <div class="form-grid" id="ob-form">
+        <label>服务商</label>
+        <select id="ob-provider"></select>
+        <label>API Base</label>
+        <input id="ob-base" type="text" spellcheck="false" placeholder="https://...">
+        <label>模型</label>
+        <input id="ob-model" type="text" spellcheck="false" placeholder="model name / endpoint id">
+        <label>API Key</label>
+        <input id="ob-key" type="password" spellcheck="false" placeholder="sk-...">
+      </div>
+      <div class="cfg-keyurl" id="ob-keyurl"></div>
+      <div class="cfg-result" id="ob-result"></div>
+      <div class="ob-actions">
+        <button class="btn" id="ob-test">测试连接</button>
+        <span style="flex:1"></span>
+        <button class="btn primary big" id="ob-save">测试通过，下一步 →</button>
+      </div>
+      <div class="cfg-note">内置 16 套预设：豆包方舟（默认）/ DeepSeek / 通义千问 / 智谱 GLM / Kimi / 混元 / 千帆 / MiniMax / 小米 MiMo /
+        硅基流动 / OpenAI / Gemini / Grok / Mistral / 本地 Ollama / 任意 OpenAI 兼容端点（内网网关、vLLM）；
+        也可设置环境变量 <code>DEBTSCOPE_API_BASE</code> / <code>DEBTSCOPE_API_KEY</code> / <code>DEBTSCOPE_MODEL</code> 后刷新。</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ VIEW 2: project setup ============ -->
+<div class="setup" id="view-setup" hidden>
+  <header class="topbar">
+    <div class="brand">
+      <svg width="24" height="24" viewBox="0 0 100 100"><circle cx="42" cy="42" r="26" fill="none" stroke="#39c5cf" stroke-width="9"/><line x1="61" y1="61" x2="88" y2="88" stroke="#39c5cf" stroke-width="11" stroke-linecap="round"/></svg>
+      <div><div class="brand-name">Debtscope <span class="brand-cn">债镜</span></div></div>
+    </div>
+    <div class="top-meta">
+      <span class="badge ok" id="setup-model-badge" style="cursor:pointer" title="点击修改模型配置"></span>
+    </div>
+  </header>
+  <main class="container setup-wrap">
+    <h1 class="setup-title">选择要监控的项目</h1>
+    <p class="muted">填写本地仓库的绝对路径，Debtscope 会建立索引并完成首次扫描（初始化监控）。之后每次「重新扫描」都会随提交记录技术债变化。</p>
+
+    <div class="card add-project">
+      <div class="ap-row">
+        <div class="ap-field grow">
+          <label>项目路径（必填）</label>
+          <input id="ap-path" type="text" spellcheck="false" placeholder="/Users/you/code/my-project">
+        </div>
+        <div class="ap-field">
+          <label>显示名称（可选）</label>
+          <input id="ap-name" type="text" spellcheck="false" placeholder="默认取目录名">
+        </div>
+        <button class="btn primary big" id="ap-add">初始化监控</button>
+      </div>
+      <div class="cfg-result" id="ap-result"></div>
+    </div>
+
+    <h2 class="setup-sub" id="ap-list-title" hidden>已监控的项目</h2>
+    <div class="project-grid" id="ap-list"></div>
+  </main>
+</div>
+
+<!-- ============ VIEW 3: dashboard ============ -->
+<div id="view-app" hidden>
+<header class="topbar">
+  <div class="brand">
+    <svg width="26" height="26" viewBox="0 0 100 100" aria-hidden="true">
+      <circle cx="42" cy="42" r="26" fill="none" stroke="#39c5cf" stroke-width="9"/>
+      <line x1="61" y1="61" x2="88" y2="88" stroke="#39c5cf" stroke-width="11" stroke-linecap="round"/>
+    </svg>
+    <div>
+      <div class="brand-name">Debtscope <span class="brand-cn">债镜</span></div>
+      <div class="brand-sub" id="repo-name">—</div>
+    </div>
+  </div>
+  <div class="top-meta">
+    <select id="project-switch" class="project-switch" title="切换 / 添加项目"></select>
+    <button class="btn" id="rules-btn">指标管理</button>
+    <span class="badge ok" id="llm-badge" style="cursor:pointer" title="点击修改模型配置"></span>
+    <span class="badge ghost" id="scan-time"></span>
+    <button class="btn primary" id="rescan-btn">重新扫描</button>
+  </div>
+</header>
+
+<main class="container">
+  <!-- KPI row -->
+  <section class="kpi-row">
+    <div class="card kpi-score">
+      <div class="card-title">代码健康分</div>
+      <div class="score-wrap">
+        <svg id="score-ring" width="108" height="108" viewBox="0 0 108 108"></svg>
+        <div class="score-center"><span id="score-num">–</span><i id="score-grade"></i></div>
+      </div>
+      <div class="score-hint" id="score-hint"></div>
+    </div>
+    <div class="card kpi">
+      <div class="card-title">未解决问题</div>
+      <div class="kpi-num" id="kpi-total">–</div>
+      <div class="kpi-sub">open / confirmed / 暂缓</div>
+    </div>
+    <div class="card kpi">
+      <div class="card-title">本次新增</div>
+      <div class="kpi-num bad" id="kpi-new">–</div>
+      <div class="kpi-sub">最近一次扫描引入</div>
+    </div>
+    <div class="card kpi">
+      <div class="card-title">本次消除</div>
+      <div class="kpi-num good" id="kpi-resolved">–</div>
+      <div class="kpi-sub">代码变更后不再命中</div>
+    </div>
+    <div class="card kpi">
+      <div class="card-title">待人工确认</div>
+      <div class="kpi-num warn" id="kpi-confirm">–</div>
+      <div class="kpi-sub">中置信度，AI/静态分析存疑</div>
+    </div>
+  </section>
+
+  <!-- charts row -->
+  <section class="charts-row">
+    <div class="card chart-card">
+      <div class="card-title">严重度分布</div>
+      <div id="chart-severity"></div>
+    </div>
+    <div class="card chart-card wide">
+      <div class="card-title">问题类型分布</div>
+      <div id="chart-rules"></div>
+    </div>
+    <div class="card chart-card">
+      <div class="card-title">健康分趋势</div>
+      <div id="chart-trend"></div>
+    </div>
+  </section>
+
+  <!-- findings -->
+  <section class="card findings-card">
+    <div class="findings-head">
+      <div class="card-title">问题明细 <span class="muted" id="findings-count"></span></div>
+      <div class="filters">
+        <input type="search" id="search-input" placeholder="搜索消息 / 文件 / 符号…">
+        <select id="severity-filter">
+          <option value="">全部严重度</option>
+          <option value="high">高</option>
+          <option value="medium">中</option>
+          <option value="low">低</option>
+        </select>
+        <select id="confidence-filter">
+          <option value="">全部置信度</option>
+          <option value="high">高置信</option>
+          <option value="medium">中置信</option>
+          <option value="low">低置信</option>
+        </select>
+        <select id="status-filter">
+          <option value="open,confirmed,wontfix">未解决</option>
+          <option value="open,confirmed,wontfix,false_positive,resolved">全部记录</option>
+          <option value="false_positive">误报</option>
+          <option value="resolved">已消除</option>
+        </select>
+      </div>
+    </div>
+    <div class="legend">
+      <span><i class="dot high"></i>高置信（静态证据确凿 / AI 确认）</span>
+      <span><i class="dot medium"></i>中置信（建议人工确认）</span>
+      <span><i class="dot low"></i>低置信（不计入健康分，默认折叠）</span>
+    </div>
+    <div id="rule-chips" class="chips"></div>
+    <div id="findings-table"></div>
+  </section>
+
+  <footer class="foot">
+    <span>Debtscope 债镜 · 数据仅保存在本机，代码不会因看板展示而外传</span>
+    <span class="muted" id="foot-stats"></span>
+  </footer>
+</main>
+</div>
+
+<!-- ============ model config modal (dashboard edit) ============ -->
+<div class="modal-mask" id="config-modal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title">模型配置</div>
+      <button class="modal-close" id="cfg-close">×</button>
+    </div>
+    <div class="modal-body">
+      <label>服务商</label>
+      <select id="cfg-provider"></select>
+      <label>API Base</label>
+      <input id="cfg-base" type="text" spellcheck="false">
+      <label>模型</label>
+      <input id="cfg-model" type="text" spellcheck="false">
+      <label>API Key <span class="muted" id="cfg-keyhint"></span></label>
+      <input id="cfg-key" type="password" spellcheck="false" placeholder="sk-...（留空表示不修改）">
+      <div class="cfg-keyurl" id="cfg-keyurl"></div>
+      <div class="cfg-result" id="cfg-result"></div>
+      <div class="cfg-note">配置仅写入本机 <code>~/.debtscope/config.json</code>（权限 600）。</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="cfg-test">测试连接</button>
+      <span style="flex:1"></span>
+      <button class="btn" id="cfg-cancel">取消</button>
+      <button class="btn primary" id="cfg-save">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ rules manager modal ============ -->
+<div class="modal-mask" id="rules-modal" hidden>
+  <div class="modal wide">
+    <div class="modal-head">
+      <div class="modal-title">指标管理 <span class="muted" id="rules-project-name"></span></div>
+      <button class="modal-close" id="rm-close">×</button>
+    </div>
+
+    <div id="rm-list-view">
+      <div class="modal-body">
+        <div class="rm-toolbar">
+          <span class="muted">内置指标可停用 / 调阈值 / 调严重度；也可以新增团队自定义指标。</span>
+          <button class="btn primary" id="rm-new">＋ 新增指标</button>
+        </div>
+        <div id="rm-list" class="rm-list"></div>
+      </div>
+    </div>
+
+    <div id="rm-edit-view" hidden>
+      <div class="modal-body">
+        <div class="rm-ai">
+          <div class="rm-ai-title">AI 辅助（可选）</div>
+          <div class="rm-ai-row">
+            <input id="rm-nl" type="text" placeholder="用一句话描述，例如：禁止用 print 调试 / 函数不超过 80 行 / 类名必须大驼峰">
+            <button class="btn" id="rm-ai-btn">生成指标</button>
+          </div>
+        </div>
+        <label>指标名称</label>
+        <input id="rm-name" type="text" spellcheck="false">
+        <label>指标类型</label>
+        <select id="rm-kind"></select>
+        <div id="rm-params"></div>
+        <label>严重度</label>
+        <select id="rm-severity">
+          <option value="high">高</option>
+          <option value="medium">中</option>
+          <option value="low">低</option>
+        </select>
+        <div class="cfg-result" id="rm-preview"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="rm-preview-btn">试跑预览（不保存）</button>
+        <span style="flex:1"></span>
+        <button class="btn" id="rm-back">返回</button>
+        <button class="btn primary" id="rm-save">保存并重新扫描</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

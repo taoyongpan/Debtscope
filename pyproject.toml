@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "debtscope"
+version = "0.3.0"
+description = "AI-powered technical debt dashboard: one sentence to define a metric, one scan to see the trend."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Debtscope Contributors" }]
+keywords = ["technical-debt", "code-quality", "static-analysis", "llm", "dashboard", "dead-code"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = []
+
+[project.scripts]
+debtscope = "debtscope.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/debtscope/debtscope"
+
+[tool.setuptools.packages.find]
+include = ["debtscope*"]
+
+[tool.setuptools.package-data]
+"debtscope.web" = ["static/*"]
