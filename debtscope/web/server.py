@@ -15,6 +15,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from .. import __version__
 from ..core import health
 from ..core.python_indexer import PythonIndexer
 from ..core.storage import Storage
@@ -22,6 +23,10 @@ from ..core.storage import Storage
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 CONTEXT_LINES = 12
 ACTIVE = ("open", "confirmed", "wontfix")
+
+# Host headers accepted on the loopback-only server. Rejecting anything else
+# blocks DNS-rebinding style attacks where a public hostname points at 127.0.0.1.
+ALLOWED_HOST_SUFFIXES = ("127.0.0.1", "localhost", "[::1]", "::1")
 
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -38,6 +43,17 @@ def _safe_resolve(root: str, rel: str) -> str | None:
     if target == root_real or target.startswith(root_real + os.sep):
         return target
     return None
+
+
+def _host_allowed(host_header: str | None) -> bool:
+    if not host_header:
+        return True  # raw HTTP/1.0 clients / health probes
+    host = host_header.split(",")[0].strip().lower()
+    host = host.rsplit("/", 1)[-1]  # tolerate accidental scheme prefixes
+    if not host:
+        return False
+    name = host.split(":")[0]
+    return name in ALLOWED_HOST_SUFFIXES
 
 
 def build_handler(registry, initial_pid: str | None = None):
@@ -58,10 +74,17 @@ def build_handler(registry, initial_pid: str | None = None):
         return idx
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "Debtscope/0.2"
+        server_version = f"Debtscope/{__version__}"
 
         def log_message(self, *_args):
             pass
+
+        def _host_ok(self) -> bool:
+            if not _host_allowed(self.headers.get("Host")):
+                self._json({"error": "invalid Host header (loopback-only server)"},
+                           status=403)
+                return False
+            return True
 
         # -- helpers --------------------------------------------------------
 
@@ -83,8 +106,8 @@ def build_handler(registry, initial_pid: str | None = None):
                 return {}
 
         def _static(self, name: str):
-            path = os.path.join(STATIC_DIR, name)
-            if not os.path.isfile(path):
+            path = _safe_resolve(STATIC_DIR, name)
+            if path is None or not os.path.isfile(path):
                 self.send_error(404); return
             with open(path, "rb") as fh:
                 body = fh.read()
@@ -105,6 +128,8 @@ def build_handler(registry, initial_pid: str | None = None):
         # -- routing --------------------------------------------------------
 
         def do_GET(self):
+            if not self._host_ok():
+                return
             parsed = urlparse(self.path)
             route, qs = parsed.path, parse_qs(parsed.query)
             try:
@@ -125,6 +150,8 @@ def build_handler(registry, initial_pid: str | None = None):
                 self._json({"error": str(e)}, status=500)
 
         def do_POST(self):
+            if not self._host_ok():
+                return
             parsed = urlparse(self.path)
             route = parsed.path
             try:
@@ -142,6 +169,8 @@ def build_handler(registry, initial_pid: str | None = None):
                 self._json({"error": str(e)}, status=500)
 
         def do_PUT(self):
+            if not self._host_ok():
+                return
             parsed = urlparse(self.path)
             try:
                 payload = self._body()
@@ -155,6 +184,8 @@ def build_handler(registry, initial_pid: str | None = None):
                 self._json({"error": str(e)}, status=500)
 
         def do_DELETE(self):
+            if not self._host_ok():
+                return
             parsed = urlparse(self.path)
             try:
                 parts = [p for p in parsed.path.split("/") if p]
@@ -415,14 +446,19 @@ def build_handler(registry, initial_pid: str | None = None):
                 self._json({"error": "not found"}, status=404); return
             with open(target, "r", encoding="utf-8", errors="replace") as fh:
                 lines = fh.read().splitlines()
-            around = qs.get("around", [None])[0]
-            if around is not None:
-                center = int(around)
-                start = max(1, center - CONTEXT_LINES)
-                end = min(len(lines), center + CONTEXT_LINES)
-            else:
-                start = int(qs.get("start", ["1"])[0])
-                end = int(qs.get("end", [str(len(lines))])[0])
+            try:
+                around = qs.get("around", [None])[0]
+                if around is not None:
+                    center = int(around)
+                    start = max(1, center - CONTEXT_LINES)
+                    end = min(len(lines), center + CONTEXT_LINES)
+                else:
+                    start = int(qs.get("start", ["1"])[0])
+                    end = int(qs.get("end", [str(len(lines))])[0])
+            except (TypeError, ValueError):
+                self._json({"error": "invalid line parameter"}, status=400); return
+            start = max(1, min(start, len(lines) or 1))
+            end = max(start, min(end, len(lines)))
             self._json({"file": rel, "start": start, "end": end,
                         "lines": [{"n": i, "text": lines[i - 1]} for i in range(start, end + 1)]})
 
@@ -445,6 +481,18 @@ def build_handler(registry, initial_pid: str | None = None):
             meta = KINDS[kind]
             params = dict(meta.default_params)
             params.update(payload.get("params") or {})
+            if kind == "name_convention":
+                import re as _re
+                try:
+                    _re.compile(params.get("regex", ""))
+                except _re.error as e:
+                    raise ValueError(f"命名正则不合法：{e}")
+                if not params.get("regex"):
+                    raise ValueError("命名规范指标需要填写正则表达式")
+                if params.get("target") not in ("function", "class"):
+                    params["target"] = "function"
+            if kind == "forbidden_call" and not str(params.get("patterns", "")).strip():
+                raise ValueError("禁用调用指标需要填写至少一个调用名")
             severity = payload.get("severity") or meta.default_severity
             if severity not in ("high", "medium", "low"):
                 severity = meta.default_severity
@@ -474,9 +522,12 @@ def build_handler(registry, initial_pid: str | None = None):
                     cfg = Config.load()
                     if not cfg.llm_enabled:
                         self._json({"error": "请先配置模型"}, status=400); return
-                    obj = LLMClient(cfg).generate_rule(payload.get("description", ""))
+                    obj, err = LLMClient(cfg).generate_rule(payload.get("description", ""))
                     if not obj or obj.get("kind") not in KINDS:
-                        self._json({"error": "模型未能生成有效指标，请换个描述或手动创建"}, status=422); return
+                        self._json({"error": err or "模型未能生成有效指标，请换个描述或手动创建"},
+                                   status=422); return
+                    if not isinstance(obj.get("params"), dict):
+                        obj["params"] = {}
                     kind = obj["kind"]
                     meta = KINDS[kind]
                     params = dict(meta.default_params)
@@ -572,6 +623,20 @@ def _spec_from_row(current: dict, merged: dict):
     )
 
 
+def _bind(port: int, handler, attempts: int = 20):
+    """Bind 127.0.0.1 starting at `port`; if busy (another Debtscope instance,
+    etc.) walk forward until a free port is found."""
+    last_err: Exception | None = None
+    for candidate in range(port, port + attempts):
+        try:
+            httpd = ThreadingHTTPServer(("127.0.0.1", candidate), handler)
+            return httpd, candidate
+        except OSError as e:
+            last_err = e
+            continue
+    raise OSError(f"no free port between {port} and {port + attempts - 1}: {last_err}")
+
+
 def serve(port: int = 8787, open_browser: bool = True,
           initial_path: str | None = None) -> None:
     from ..harness.projects import ProjectRegistry
@@ -583,9 +648,11 @@ def serve(port: int = 8787, open_browser: bool = True,
             project = registry.get_by_path(abspath) or registry.add("", abspath)
             initial_pid = project.id
     handler = build_handler(registry, initial_pid)
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
-    url = f"http://127.0.0.1:{port}"
+    httpd, actual_port = _bind(port, handler)
+    url = f"http://127.0.0.1:{actual_port}"
     print("Debtscope 债镜 — local technical-debt dashboard")
+    if actual_port != port:
+        print(f"  ! port {port} busy, using {actual_port} instead")
     print(f"  {url}   (Ctrl-C to stop)")
     if open_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()

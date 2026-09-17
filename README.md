@@ -1,245 +1,273 @@
 # 🔭 Debtscope · 债镜
 
-**AI-powered technical debt dashboard for your codebase.**
-Connect a model, pick a project, define metrics in plain language — then watch debt trend with every commit.
+<p>
+  <a href="README.en.md">English</a> · <b>简体中文</b>
+</p>
 
-**一句话，看清你的代码欠了多少债。** 配置模型 → 选择本地项目初始化监控 → AI 甄别技术债、自然语言生成自定义指标 → 可视化看板随每次提交跟踪增减。
+[![CI](https://github.com/taoyongpan/Debtscope/actions/workflows/ci.yml/badge.svg)](https://github.com/taoyongpan/Debtscope/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-> Debtscope answers three questions teams cannot today: **how much** debt do we have, **where** exactly is it, and are we getting **better or worse**?
+**一句话，看清你的代码欠了多少债。**
 
-- **零第三方依赖**：纯 Python 标准库实现，`git clone` 即可运行
-- **确定性内核 + Agent 外壳**：AST/调用图规则做全量粗筛，LLM 只精判 1%–5% 的候选，便宜、快、可复核
-- **指标即数据**：内置规则可停用/调阈值/调严重度，8 类指标可在界面上自助新增，或**一句话让 AI 生成**，保存前先试跑预览
-- **多项目托管**：一个看板切换监控多个本地仓库，数据各自独立、全部留在本机
+配置模型 → 选择本地项目初始化监控 → AI 甄别技术债、用自然语言生成自定义指标 → 可视化看板随每次提交跟踪债务增减。
+
+> Debtscope 回答三个团队长期答不上来的问题：技术债**有多少**、**具体在哪里**、我们正在变**好还是变差**？
+
+- **零第三方依赖**：纯 Python 标准库实现，`git clone` 即可运行，无需数据库 / Docker / 服务端
+- **确定性内核 + Agent 外壳**：AST 与调用图规则做全量粗筛，LLM 只精判 1%–5% 的候选，便宜、快、可复核
+- **指标即数据**：内置规则可停用 / 调阈值 / 调严重度；8 类指标可在界面上自助新增，或**一句话让 AI 生成**，保存前先在当前仓库上试跑预览
+- **多项目托管**：一个看板切换监控多个本地仓库，数据各自独立，全部留在本机
+- **配置前置**：首次进入是「连接模型 → 选择项目 → 初始化监控」三步引导，默认豆包 Seed-Evolving，内置 16 套 OpenAI 兼容预设
 
 ---
 
-## Why Debtscope
+## 为什么需要 Debtscope
 
-| | SonarQube | AI coding assistants | Manual review | **Debtscope** |
+| 能力 | SonarQube | AI 编程助手 | 人工 Code Review | **Debtscope** |
 |---|---|---|---|---|
-| Whole-repo inventory | ✅ | ❌ (edit-time only) | ❌ | ✅ |
-| Natural-language custom metrics | ❌ write plugins | partial | ❌ | ✅ AI → rule, with dry-run preview |
-| Custom rules editable in the UI | ❌ | ❌ | ❌ | ✅ create / edit / disable / delete |
-| Semantic dead-vs-entry-point judgment | ❌ syntax rules | ✅ but no repo-wide view | ✅ not repeatable | ✅ hybrid |
-| Iteration-over-iteration trend narrative | weak | ❌ | ❌ | ✅ first-class |
-| Multi-project dashboard | ❌ heavyweight server | ❌ | ❌ | ✅ local registry |
-| Traceable evidence + confidence levels | partial | weak | ✅ | ✅ |
-| Zero-dependency, runs locally | ❌ | ✅ | — | ✅ stdlib only |
+| 全仓技术债盘点 | ✅ | ❌ 仅编辑时 | ❌ | ✅ |
+| 自然语言定义自定义指标 | ❌ 要写插件 | 部分支持 | ❌ | ✅ 一句话生成规则，带试跑预览 |
+| 在界面里增删改自定义规则 | ❌ | ❌ | ❌ | ✅ 新增 / 编辑 / 停用 / 删除 / 重置 |
+| 语义判定「死代码 vs 框架入口」 | ❌ 仅语法规则 | ✅ 但没有全仓视角 | ✅ 不可复现 | ✅ 确定性粗筛 + AI 精判 |
+| 迭代间趋势叙事 | 弱 | ❌ | ❌ | ✅ 一等公民 |
+| 多项目看板 | ❌ 重型服务端 | ❌ | ❌ | ✅ 本地注册表 |
+| 可追溯证据 + 置信度分级 | 部分 | 弱 | ✅ | ✅ |
+| 零依赖、本地运行 | ❌ | ✅ | — | ✅ 仅标准库 |
 
-## Screenshots
-
-<p align="center">
-  <img src="docs/images/onboarding.png" alt="Connect a model" width="920">
-</p>
-
-*① First launch is a 3-step guide: connect a model → pick a project → initialize monitoring. Defaults to **豆包 / 火山方舟 with the unified `doubao-seed-evolving` model** (Agent & Coding optimized, always the latest release); 15 other presets — Qwen, GLM, Kimi, Hunyuan, ERNIE, MiniMax, MiMo, SiliconFlow, OpenAI, Gemini, Grok, Mistral, Ollama, custom — are one dropdown away. Live connection test included; local endpoints need no key.*
+## 界面一览
 
 <p align="center">
-  <img src="docs/images/project-setup.png" alt="Initialize project monitoring" width="920">
+  <img src="docs/images/onboarding.png" alt="连接模型" width="920">
 </p>
 
-*② Give a local repository path; Debtscope builds the index and runs the first scan (initializes monitoring). Monitored projects appear as cards and stay in the top-bar switcher.*
+*① 首次启动是三步引导：连接模型 → 选择项目 → 初始化监控。默认选中**豆包 / 火山方舟（统一模型 ID `doubao-seed-evolving`，始终指向最新的 Agent & Coding 优化版本）**；下拉即可切换 DeepSeek、通义千问、智谱 GLM、Kimi、混元、千帆、MiniMax、小米 MiMo、硅基流动、OpenAI、Gemini、Grok、Mistral、本地 Ollama 或任意自定义端点。保存前可实时测试连接，本地端点无需 Key。*
 
 <p align="center">
-  <img src="docs/images/dashboard-v2.png" alt="Debtscope dashboard" width="920">
+  <img src="docs/images/project-setup.png" alt="初始化项目监控" width="920">
 </p>
 
-*③ Health score ring, this-scan delta (new vs eliminated), severity donut, rule-type distribution, score trend and a filterable findings table — with project switcher, metric manager and model badge in the top bar.*
+*② 填写本地仓库的绝对路径，Debtscope 建立索引并完成首次扫描（即初始化监控）。已监控项目以卡片展示，并常驻顶栏切换器。*
 
 <p align="center">
-  <img src="docs/images/rules-manager.png" alt="Metric manager" width="920">
+  <img src="docs/images/dashboard-v2.png" alt="Debtscope 看板" width="920">
 </p>
 
-*④ Metric manager: toggle built-in metrics, tune thresholds and severity, or add team-specific ones. Built-in metrics can be reset to defaults; custom metrics can be deleted.*
+*③ 健康分环形图、本次新增 / 消除、严重度环形分布、问题类型条形分布、健康分趋势、可筛选的问题明细表；顶栏是项目切换、指标管理、模型徽章与重新扫描。*
 
 <p align="center">
-  <img src="docs/images/rule-editor.png" alt="AI-assisted metric editor" width="760">
+  <img src="docs/images/rules-manager.png" alt="指标管理" width="920">
 </p>
 
-*⑤ Describe a metric in one sentence — “ban print debugging”, “functions must not exceed 80 lines”, “class names must be PascalCase” — AI compiles it into a parameterized rule. **Dry-run preview against the current index before saving**; the scan reruns automatically afterwards.*
+*④ 指标管理：启用 / 停用内置指标、调整严重度、编辑阈值，或新增团队专属指标。内置指标可一键重置回默认，自定义指标可删除。*
 
 <p align="center">
-  <img src="docs/images/finding-detail.png" alt="Finding detail with code evidence" width="920">
+  <img src="docs/images/rule-editor.png" alt="AI 辅助指标编辑器" width="760">
 </p>
 
-*Click any finding to expand code context with the offending line highlighted, review verdict, fix suggestion and one-click triage (confirm / false-positive / wontfix). Deep-linkable via `#finding-<id>`.*
+*⑤ 用一句话描述指标——「禁止 print 调试」「函数不超过 80 行」「类名必须大驼峰」——AI 把它编译成带参数的确定性规则。**保存前在当前索引上试跑预览**（命中数量与样例位置），保存后自动重新扫描。*
 
-## How it works
+<p align="center">
+  <img src="docs/images/finding-detail.png" alt="问题详情与代码证据" width="920">
+</p>
 
-Debtscope does **not** feed your whole repository to an LLM. Deterministic work stays deterministic; the model only judges a small candidate set — which keeps scans cheap, fast, and trustworthy.
+*点击任意问题展开代码上下文（问题行高亮）、AI 研判结论、修复建议与一键分诊（确认问题 / 误报 / 暂不处理），支持 `#finding-<id>` 深链定位。*
+
+## 工作原理
+
+Debtscope **不会把整个仓库喂给大模型**。确定性的工作交给确定性的代码，模型只裁决一小批候选——这让扫描便宜、快速、可信。
 
 ```mermaid
 flowchart TB
-    UI["Web Dashboard · onboarding · projects · metrics · overview · evidence"]
-    L5["L5 Render · chart selection & layout"]
-    L4["L4 Aggregate · counts · severity · snapshot diff"]
-    L3["L3 Review · LLM semantic verdict on candidates only · NL→rule generation"]
-    L2["L2 Rules · data-driven AST/call-graph checks produce candidates"]
-    L1["L1 Index · symbols · args · nesting · call graph · references · git history"]
-    REPO[("Git repository")]
+    UI["Web 看板 · 引导 · 多项目 · 指标管理 · 总览 · 证据"]
+    L5["L5 渲染 · 图表选型与布局"]
+    L4["L4 聚合 · 计数 · 严重度 · 快照对账"]
+    L3["L3 精判 · 仅对候选做 LLM 语义裁决 · 自然语言生成规则"]
+    L2["L2 规则 · 数据驱动的 AST/调用图检查，产出候选"]
+    L1["L1 索引 · 符号 · 参数 · 嵌套 · 调用图 · 引用 · Git 版本"]
+    REPO[("Git 仓库")]
     REPO --> L1 --> L2 --> L3 --> L4 --> L5 --> UI
-    DB[("SQLite · one ledger per project · rules & snapshots")]
+    DB[("SQLite · 每项目一个台账 · 规则与快照")]
     L1 -.-> DB
     L4 -.-> DB
 ```
 
-**Anti-hallucination defenses**
+**反幻觉防线**
 
-1. **Structure first** — no finding without structural evidence from the index/call graph.
-2. **Three-part evidence** — every finding links to file, line, code snippet and reference chain.
-3. **Confidence levels** — high / medium (needs human glance) / low (folded, excluded from score).
-4. **Feedback loop** — marking a false positive suppresses it on every future scan.
-5. **AI-generated rules are never trusted blindly** — they compile into the same deterministic checkers as built-in rules, and you must dry-run them on your code before saving.
+1. **结构先行**——没有索引 / 调用图的结构证据，就不会产生任何问题。
+2. **三位一体证据**——每条问题都带文件、行号、代码片段与引用链。
+3. **置信度分级**——高 / 中（建议人工看一眼）/ 低（折叠且不计入健康分）。
+4. **反馈闭环**——标记为「误报」的问题，以后每次扫描都会自动抑制。
+5. **AI 生成的规则不被盲信**——它被编译成与内置规则完全相同的确定性检测器，且保存前必须在你的代码上试跑。
+6. **模型故障不挡路**——网络、鉴权、限流或模型异常时，扫描自动降级为纯静态模式，并在 CLI、看板徽章与扫描摘要中**明确提示降级原因**，绝不静默。
 
-Dead-code findings are honestly worded as *“no call/reference found by static analysis, please confirm”* — reflection, dynamic dispatch and framework callbacks can never be fully ruled out statically.
+死代码类问题的措辞始终诚实：*「静态分析未发现调用 / 引用，请人工确认」*——反射、动态分发与框架回调永远无法被静态分析完全排除。
 
-### Deterministic core, agentic shell
+### 确定性内核，Agent 外壳
 
-The agent shell (`debtscope.harness`) follows the **Agent = Model + Harness** paradigm popularized by DeepSeek Harness: pluggable model adapters, a project registry, tool contracts, and traceable runs — but the built-in rules stay on the deterministic fast path (fast, free, zero-hallucination). Model calls are reserved for what only a model can do: semantic dead-code review and turning natural language into parameterized rules. See **[docs/harness-architecture.md](docs/harness-architecture.md)** for the full blueprint (micro-kernel, tool registry, ReAct loop, session traces, plugin strategy, security model).
+Agent 外壳（`debtscope.harness`）遵循 DeepSeek Harness 普及的 **Agent = Model + Harness** 范式：可插拔模型适配、项目注册表、工具契约、可追溯运行；而内置规则始终走确定性快车道（快、免费、零幻觉）。模型只做只有模型能做的事：废弃代码的语义精判、把自然语言变成参数化规则。完整蓝图（微内核、工具注册表、ReAct 循环、会话 trace、插件策略、安全模型）见 **[docs/harness-architecture.md](docs/harness-architecture.md)**。
 
-## Quickstart
+## 快速开始
 
-Requires Python 3.10+. **Zero third-party dependencies** (standard library only).
+需要 Python 3.10+，**零第三方依赖**（只用标准库）。
 
 ```bash
-git clone https://github.com/debtscope/debtscope
-cd debtscope
+git clone https://github.com/taoyongpan/Debtscope.git
+cd Debtscope
 
-# start the web app — the 3-step guide walks you through model → project → first scan
+# 启动 Web 应用，三步引导带你完成 模型 → 项目 → 首次扫描
 python -m debtscope serve
 ```
 
-1. **Connect a model** — the guide defaults to 豆包 / 火山方舟 with model `doubao-seed-evolving`; just paste your Ark API key (or switch to DeepSeek / OpenAI / a local Ollama endpoint, which needs no key). The guide tests the connection before continuing.
-2. **Pick a project** — enter an absolute path to a local repository to initialize monitoring (first scan runs immediately).
-3. **Dashboard** — switch between monitored projects from the top bar any time; **＋ 添加项目…** adds more.
+1. **连接模型**——引导默认豆包 / 火山方舟的 `doubao-seed-evolving`，粘贴方舟 API Key 即可；也可以切换到 DeepSeek / OpenAI / 本地 Ollama（无需 Key）。进入下一步前会实时测试连接。
+2. **选择项目**——填写本地仓库的绝对路径，立即执行首次扫描、初始化监控。
+3. **进入看板**——随时在顶栏切换已监控项目，「＋ 添加项目…」可继续添加。
 
-CLI-only / CI usage:
+> 默认端口 8787 被占用时会自动顺延寻找可用端口；浏览器会打开实际端口。
 
-```bash
-pip install -e .
-debtscope config                 # one-time interactive model setup
-debtscope scan /path/to/repo     # requires a configured model (AI review enabled)
-debtscope scan /path/to/repo --no-llm   # static-only fallback for CI / offline
-debtscope serve                  # web app (optionally: debtscope serve /path/to/repo)
-```
-
-> A model is required by design — Debtscope is an AI-first product and refuses to silently present unreviewed static results as the default experience. `--no-llm` remains as an explicit offline/CI escape hatch.
-
-### Model configuration
+也可以安装为命令行工具：
 
 ```bash
-debtscope config        # guided wizard, saves to ~/.debtscope/config.json (chmod 600)
-debtscope doctor        # verify config and connectivity any time
+pip install -e .          # 或 pip install debtscope（发布到 PyPI 后）
+debtscope serve
 ```
 
-16 built-in presets, all speaking the OpenAI Chat Completions protocol. The guide defaults to **豆包/火山方舟**; pick any other from the dropdown — base URL and model are pre-filled and editable.
+CLI / CI 用法：
 
-| Provider | API base | Default model |
+```bash
+debtscope config                        # 一次性交互式模型配置
+debtscope scan /path/to/repo            # 扫描并记录快照（需已配置模型）
+debtscope scan /path/to/repo --no-llm   # 纯静态模式，不调用模型（CI / 离线兜底）
+debtscope serve [path]                  # Web 看板，可顺带注册并打开某项目
+```
+
+> 产品设计上**默认要求配置模型**：Debtscope 是 AI-first 产品，拒绝把未经精判的静态结果当作默认体验静默呈现。`--no-llm` 仅作为 CI / 离线场景的显式逃生舱。
+
+### 模型配置
+
+```bash
+debtscope config        # 引导式配置向导，写入 ~/.debtscope/config.json（权限 600）
+debtscope doctor        # 随时检查配置与模型连通性
+debtscope config --show # 查看当前生效配置（Key 脱敏）
+```
+
+内置 16 套预设，全部说 OpenAI Chat Completions 协议。引导默认**豆包 / 火山方舟**，其余在下拉中选择；API Base 与模型 ID 均已预填且可编辑。
+
+| 服务商 | API Base | 默认模型 |
 |---|---|---|
-| **豆包 / 火山方舟** (default) | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-evolving` |
+| **豆包 / 火山方舟**（默认） | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-evolving` |
 | DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
 | 阿里通义千问 / 百炼 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3-coder-plus` |
 | 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-5.3` |
 | Kimi / 月之暗面 | `https://api.moonshot.cn/v1` | `kimi-k2.6` |
 | 腾讯混元 | `https://api.hunyuan.cloud.tencent.com/v1` | `hunyuan-turbo` |
 | 百度千帆 / 文心 | `https://qianfan.baidubce.com/v2` | `ernie-4.5-turbo-128k` |
-| MiniMax | `https://api.minimax.chat/v1` | `MiniMax-M2.5` |
+| MiniMax 海螺 | `https://api.minimax.chat/v1` | `MiniMax-M2.5` |
 | 小米 MiMo | `https://api.xiaomimimo.com/v1` | `mimo-v2.5-pro` |
-| 硅基流动 SiliconFlow (aggregator) | `https://api.siliconflow.cn/v1` | `Qwen/Qwen3-Coder-480B-A35B-Instruct` |
+| 硅基流动 SiliconFlow（聚合） | `https://api.siliconflow.cn/v1` | `Qwen/Qwen3-Coder-480B-A35B-Instruct` |
 | OpenAI | `https://api.openai.com/v1` | `gpt-5.5` |
 | Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/` | `gemini-3.5-flash` |
 | xAI Grok | `https://api.x.ai/v1` | `grok-4.6` |
 | Mistral | `https://api.mistral.ai/v1` | `mistral-large-latest` |
-| Ollama (local, no key) | `http://127.0.0.1:11434/v1` | `qwen2.5-coder:7b` |
-| Custom | any OpenAI-compatible endpoint (gateway, vLLM, LM Studio…) | — |
+| Ollama（本地，无需 Key） | `http://127.0.0.1:11434/v1` | `qwen2.5-coder:7b` |
+| 自定义 | 任意 OpenAI 兼容端点（内网网关、vLLM、LM Studio…） | — |
 
-Model IDs are common current releases as of 2026-09 — type any newer/dated model name (or an Ark `ep-xxxx` endpoint id) into the model field. Local endpoints (`127.0.0.1` / `localhost`) work without a key.
+表中模型 ID 为 2026-09 常见的当前版本，模型字段可手动填写任意更新 / 固定版本（或方舟的 `ep-xxxx` 接入点 ID）。本地端点（`127.0.0.1` / `localhost`）无需 Key。
 
-Environment variables override the file (handy for CI):
+环境变量优先级高于配置文件（CI 友好，同时兼容 `OPENAI_API_KEY` / `OPENAI_API_BASE`）：
 
 ```bash
 export DEBTSCOPE_API_BASE="https://ark.cn-beijing.volces.com/api/v3"
-export DEBTSCOPE_API_KEY="your-ark-api-key"   # also reads OPENAI_API_KEY / OPENAI_API_BASE
+export DEBTSCOPE_API_KEY="your-ark-api-key"
 export DEBTSCOPE_MODEL="doubao-seed-evolving"
 ```
 
-In the web app, click the model badge in the top bar to edit configuration at any time.
+在 Web 看板中，点击顶栏模型徽章可随时修改配置；若最近一次扫描 AI 精判失败，徽章会变成「AI 精判降级」并显示原因。
 
-## Metrics & rules
+## 指标与规则
 
-### 7 built-in metrics (Python)
+### 7 条内置指标（Python）
 
-| Rule | Severity | What it catches |
+| 规则 | 严重度 | 检测内容 |
 |---|---|---|
-| `unused_function` | medium | functions/methods with no call or reference anywhere in the repo (framework decorators, dunders, tests, abstract methods excluded; LLM-refined when configured) |
-| `swallowed_exception` | medium | bare `except`, or `except: pass` that silently swallows errors |
-| `mutable_default_argument` | medium | `def f(x=[])` and friends — shared mutable defaults |
-| `open_without_context` | medium | `open()` outside a `with` block, leaking handles on error paths |
-| `long_function` | low | functions over 50 lines |
-| `todo_accumulation` | low | files with 5+ TODO/FIXME comments |
-| `duplicate_function` | low | structurally identical function bodies (copy-paste), robust to renamed variables |
+| `unused_function` | 中 | 全仓找不到任何调用或引用的函数 / 方法（已排除框架装饰器、双下划线方法、测试与抽象方法；配置模型后经 LLM 精判） |
+| `swallowed_exception` | 中 | 裸 `except`，或捕获异常后直接 `pass` 静默吞没 |
+| `mutable_default_argument` | 中 | `def f(x=[])` 一类在多次调用间共享的可变默认参数 |
+| `open_without_context` | 中 | `open()` 未放在 `with` 中，异常路径泄漏文件句柄 |
+| `long_function` | 低 | 函数超过 50 行 |
+| `todo_accumulation` | 低 | 单文件堆积 5 处以上 TODO/FIXME |
+| `duplicate_function` | 低 | 函数体结构完全一致的复制粘贴（对变量改名免疫） |
 
-### 8 metric types you can add yourself
+### 8 类可自助新增的指标
 
-| Kind | Parameters | Example |
+| 类型（kind） | 参数 | 示例 |
 |---|---|---|
-| `function_too_long` | max lines | 函数不超过 80 行 |
-| `file_too_long` | max lines | 单文件不超过 500 行 |
-| `too_many_args` | max args | 函数参数不超过 5 个 |
-| `nested_too_deep` | max depth | 嵌套不超过 4 层 |
-| `todo_accumulation` | max count | 单文件 TODO 不超过 3 个 |
-| `duplicate_function` | min lines / stmts | 调小粒度，抓更短的复制粘贴 |
-| `forbidden_call` | comma-separated names | 禁止 `print,eval,os.system` |
-| `name_convention` | target + regex + message | 类名必须大驼峰、函数必须 snake_case |
+| `function_too_long` | 最大行数 | 函数不超过 80 行 |
+| `file_too_long` | 最大行数 | 单文件不超过 500 行 |
+| `too_many_args` | 最大参数数 | 函数参数不超过 5 个 |
+| `nested_too_deep` | 最大嵌套层数 | 嵌套不超过 4 层 |
+| `todo_accumulation` | 最大数量 | 单文件 TODO 不超过 3 个 |
+| `duplicate_function` | 最小行数 / 语句数 | 调小粒度，抓更短的复制粘贴 |
+| `forbidden_call` | 逗号分隔的调用名 | 禁止 `print,eval,os.system` |
+| `name_convention` | 检查对象 + 正则 + 提示语 | 类名大驼峰、函数 snake_case |
 
-Every custom metric is a row in the same rule engine as built-in ones — no special execution path. The **AI assist** box compiles a sentence into `{kind, severity, params}`; you then **dry-run preview** it against the current index (hit count + sample locations) before saving.
+每条自定义指标与内置指标走**同一个规则引擎、同一条执行路径**，没有特殊待遇。AI 辅助框把一句话编译成 `{kind, severity, params}`，保存前可在当前索引上**试跑预览**（命中数 + 样例）；非法正则、空调用名等问题会在试跑阶段直接报错。
 
-Inspect from the CLI: `debtscope rules` lists built-in metrics and creatable kinds.
+CLI 查看：`debtscope rules` 列出内置指标与可创建类型。
 
-## Multi-project storage
+## 多项目与数据存储
 
 ```
 ~/.debtscope/
-├── config.json            # model config (chmod 600)
-├── projects.json          # monitored project registry
-└── data/<project-id>.db   # one SQLite ledger per project (rules, findings, snapshots)
+├── config.json            # 模型配置（chmod 600）
+├── projects.json          # 已监控项目注册表（原子写入）
+└── data/<project-id>.db   # 每个项目一个 SQLite 台账（规则、问题、快照、反馈）
 ```
 
-Project IDs are content-derived from the absolute path, so registering the same path twice is idempotent. Nothing is uploaded anywhere.
+项目 ID 由绝对路径哈希派生，重复注册同一路径是幂等的；根目录与用户主目录被明确禁止监控，避免全盘扫描。所有数据只存在本机。
 
-## CLI
+## 命令行
 
 ```bash
-debtscope serve [path]    # web dashboard; optionally register & focus a project
-debtscope scan <path>     # index, analyze, reconcile findings, record a snapshot
-        --no-llm          # static-only mode, no model calls (CI / offline)
-        --db <path>       # override ledger path
-debtscope config          # interactive model/endpoint wizard (also --show, --provider …)
-debtscope doctor          # check config and model connectivity
-debtscope rules           # list built-in metrics and creatable kinds
+debtscope serve [path]      # Web 看板；可选地顺带注册并聚焦某个项目
+      --port <port>         # 指定起始端口（占用时自动顺延）
+      --no-browser          # 不自动打开浏览器
+debtscope scan <path>       # 索引、分析、对账并记录快照
+      --no-llm              # 纯静态模式，不调用模型（CI / 离线）
+      --db <path>           # 自定义台账路径
+debtscope config            # 交互式模型 / 端点向导（另有 --show、--provider 等）
+debtscope doctor            # 检查配置与模型连通性
+debtscope rules             # 列出内置指标与可创建类型
 ```
 
-## Roadmap
+## 路线图
 
-- **v0.1** ✅ Python AST backend, 7 built-in metrics, SQLite ledger, web dashboard
-- **v0.2** ✅ model config wizard (CLI + web), provider presets, connectivity test, `debtscope.harness` package
-- **v0.3** ✅ config-first 3-step onboarding, multi-project registry, data-driven rule engine, UI metric manager (create/edit/disable/delete/reset), 8 creatable metric kinds, AI rule generation with dry-run preview
-- **v0.4** — micro-kernel + tool registry + multi-step ReAct loop (evidence-fetching review, conversational metric tuning), run/trace JSONL & traces page
-- **v0.5** — language-backend plugin seam + tree-sitter (Java / Go / JS/TS), token-cost dashboard
-- **v0.6** — CI headless mode (`--ci`, SARIF output, quality-gate exit codes); repo groups & aggregate rollups
-- **later** — runtime-coverage cross-check for dead code, autofix with diff review, optional `dsh-plugin-debtscope` bundle
+- **v0.1** ✅ Python AST 后端、7 条内置指标、SQLite 台账、Web 看板
+- **v0.2** ✅ 模型配置向导（CLI + Web）、厂商预设、连通性测试、`debtscope.harness` 包
+- **v0.3** ✅ 配置前置三步引导、多项目注册表、数据驱动规则引擎、界面指标管理（增 / 改 / 停 / 删 / 重置）、8 类可创建指标、AI 生成规则 + 试跑预览、16 套模型预设
+- **v0.3.1** ✅ 本地服务安全加固（静态目录防穿越、Host 白名单）、AI 精判 JSON 协议统一与容错解析、降级原因可见、端口占用自愈、40 个离线测试、CI
+- **v0.4** — 微内核 + 工具注册表 + 多步 ReAct 循环（可取证的精判、对话式指标调优）、运行 / trace JSONL 与链路页
+- **v0.5** — 语言后端插件缝 + tree-sitter（Java / Go / JS/TS）、Token 成本看板
+- **v0.6** — CI 无头模式（`--ci`、SARIF 输出、质量门退出码）、项目分组与聚合滚动视图
+- **更后面** — 死代码的运行时覆盖率交叉验证、带 diff 评审的自动修复、可选插件包
 
-See [docs/design-v2.md](docs/design-v2.md) for the product/technical design and
-[docs/harness-architecture.md](docs/harness-architecture.md) for the harness blueprint.
+产品与技术设计见 [docs/design-v2.md](docs/design-v2.md)，Harness 蓝图见 [docs/harness-architecture.md](docs/harness-architecture.md)。
 
-## Privacy
+## 隐私
 
-Everything runs on your machine. Source code is read locally; the only network
-calls are LLM requests to the endpoint you configure. Point it at an internal
-gateway and no code ever leaves your network. Keys are stored only in
-`~/.debtscope/config.json` with `chmod 600`.
+一切都在你的机器上运行：源码只在本地读取，唯一的网络请求是发往你所配置端点的 LLM 请求。把端点指向内网网关，代码就永远不会离开你的网络。Key 仅保存在 `~/.debtscope/config.json`（权限 600），不会写入被扫描的仓库。
 
-## License
+## 贡献
+
+欢迎提交 Issue 与 PR！开发只需要 Python 3.10+，全部 40 个测试离线可跑、无需 API Key：
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+详见 [CONTRIBUTING.md](CONTRIBUTING.md)，版本变更见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 许可证
 
 [MIT](LICENSE)

@@ -3,4 +3,4 @@
 One sentence to define a metric, one scan to see the trend.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"

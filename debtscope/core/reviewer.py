@@ -26,6 +26,7 @@ class ReviewStats:
     llm_entry: int = 0
     llm_uncertain: int = 0
     degraded: bool = False
+    llm_error: str | None = None
     by_rule: dict[str, int] = field(default_factory=dict)
 
 
@@ -59,10 +60,14 @@ def review(
                 "decorators": f.evidence.get("decorators", []),
                 "snippet": f.evidence.get("snippet", "")[:SNIPPET_LIMIT],
             })
-        verdicts = client.classify_dead_code(items)
+        verdicts, err = client.classify_dead_code(items)
+        stats.llm_error = err
         if verdicts:
             stats.llm_reviewed = len(verdicts)
-        else:
+        if err or not verdicts:
+            # Total failure (network/auth/quota) or no usable verdict: the
+            # scan stays honest — every candidate keeps a "please confirm"
+            # state and the reason surfaces in the scan summary / dashboard.
             stats.degraded = True
 
     for f in dead_candidates:

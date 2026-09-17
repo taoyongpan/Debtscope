@@ -51,6 +51,9 @@ def _print_summary(s: dict) -> None:
     else:
         mode = "static-only (--no-llm; run `debtscope config` to enable AI review)"
     print(f"  L2 candidates {s['candidates']} -> kept {s['kept']} | {mode}")
+    if rev.get("degraded"):
+        reason = rev.get("llm_error") or "模型未返回可用判定"
+        print(f"  ! AI 精判降级为静态模式：{reason}")
     c = s["reconcile"]
     print(f"  this scan: +{c['new']} new, {c['resolved']} resolved, "
           f"{c['reopened']} reopened, {c['existing']} unchanged"

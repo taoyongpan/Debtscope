@@ -11,6 +11,7 @@ const state = {
              status: "open,confirmed,wontfix" },
   expanded: new Set(),
   editingRule: null,
+  initialScanStarted: false,
 };
 
 const SEV_COLORS = { high: "#f85149", medium: "#d29922", low: "#58a6ff" };
@@ -71,10 +72,23 @@ async function boot() {
   }
 }
 
-function renderModelBadges() {
+function renderModelBadges(degraded, error) {
   const label = "AI 精判 · " + (state.boot.model || "model");
-  $("llm-badge").textContent = label;
-  $("setup-model-badge").textContent = label;
+  ["llm-badge", "setup-model-badge"].forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    el.classList.remove("ok", "warn");
+    if (degraded) {
+      el.textContent = "AI 精判降级（点此检查模型）";
+      el.classList.add("warn");
+      el.title = "本次扫描未能完成 AI 精判，疑似废弃函数仅做静态判定。\n原因：" +
+        (error || "模型未返回可用判定") + "\n点击检查/修改模型配置后重新扫描。";
+    } else {
+      el.textContent = label;
+      el.classList.add("ok");
+      el.title = "点击修改模型配置";
+    }
+  });
 }
 
 // ===========================================================================
@@ -326,6 +340,13 @@ async function loadAll() {
     const row = document.querySelector('[data-detail="' + id + '"]');
     if (row) row.scrollIntoView({ block: "center" });
   }
+
+  // A project registered via `debtscope serve <path>` has no snapshot yet —
+  // run its initialization scan automatically instead of showing an empty board.
+  if (!overview.last_scan && !state.initialScanStarted) {
+    state.initialScanStarted = true;
+    rescan();
+  }
 }
 
 function scoreColor(score) {
@@ -363,6 +384,7 @@ function renderKPI() {
   $("kpi-resolved").textContent = o.delta.resolved || 0;
   $("kpi-confirm").textContent = o.aggregate.by_confidence ? (o.aggregate.by_confidence.medium || 0) : 0;
   const stats = o.scan_stats || {};
+  renderModelBadges(stats.llm_degraded, stats.llm_error);
   $("foot-stats").textContent = stats.loc
     ? stats.files + " 文件 · " + stats.loc + " 行 · " + stats.symbols + " 符号 · 启用指标 " +
       (stats.rules_enabled ?? "-") + "（自定义 " + (stats.rules_custom ?? 0) + "）"
@@ -385,7 +407,7 @@ function donut(containerId, data) {
     return '<path d="M' + x0y0[0] + "," + x0y0[1] + " A" + r + "," + r + " 0 " + large + " 1 " +
       x1y1[0] + "," + x1y1[1] + " L" + x2y2[0] + "," + x2y2[1] + " A" + (r - w) + "," + (r - w) +
       " 0 " + large + " 0 " + x3y3[0] + "," + x3y3[1] + ' Z" fill="' + d.color +
-      '"><title>' + d.label + ": " + d.value + "</title></path>";
+      '"><title>' + esc(d.label) + ": " + d.value + "</title></path>";
   }).join("");
   el.innerHTML =
     '<svg viewBox="0 0 180 200" style="max-height:210px">' + arcs +
