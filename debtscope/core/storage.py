@@ -8,8 +8,11 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from collections import defaultdict
 from datetime import datetime
 
+from .callgraph import node_key
+from .health import health_score
 from .models import Finding, Snapshot, Status
 
 SCHEMA = """
@@ -80,6 +83,39 @@ CREATE TABLE IF NOT EXISTS rules (
     needs_review INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS endpoints (
+    id TEXT PRIMARY KEY,
+    method TEXT NOT NULL,
+    path TEXT NOT NULL,
+    framework TEXT NOT NULL DEFAULT '',
+    handler_file TEXT NOT NULL DEFAULT '',
+    handler_qualname TEXT NOT NULL DEFAULT '',
+    handler_line INTEGER NOT NULL DEFAULT 0,
+    first_seen TEXT NOT NULL,
+    last_seen TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS endpoint_findings (
+    endpoint_id TEXT NOT NULL,
+    finding_id INTEGER NOT NULL,
+    PRIMARY KEY (endpoint_id, finding_id)
+);
+
+CREATE TABLE IF NOT EXISTS endpoint_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    endpoint_id TEXT NOT NULL,
+    snapshot_id INTEGER,
+    scanned_at TEXT NOT NULL,
+    score INTEGER NOT NULL DEFAULT 100,
+    open_count INTEGER NOT NULL DEFAULT 0,
+    high_count INTEGER NOT NULL DEFAULT 0,
+    medium_count INTEGER NOT NULL DEFAULT 0,
+    chain_depth INTEGER NOT NULL DEFAULT 0,
+    node_count INTEGER NOT NULL DEFAULT 0,
+    blast_radius INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_epsnap_ep ON endpoint_snapshots(endpoint_id);
 """
 
 
@@ -320,6 +356,152 @@ class Storage:
         self.conn.commit()
         self.seed_rules()
         return True
+
+    # -- endpoints (interface radar) ----------------------------------------
+
+    def reconcile_endpoints(self, endpoint_dicts: list[dict], chains: dict,
+                            blast: dict, active_rows: list[dict],
+                            snapshot_id: int) -> dict:
+        """Replace endpoint inventory, remap findings onto chains, snapshot."""
+        now = datetime.now().isoformat(timespec="seconds")
+        cur = self.conn.cursor()
+
+        # findings indexed by function node key and by file (file-level debt)
+        func_map: dict[str, list[dict]] = defaultdict(list)
+        file_map: dict[str, list[dict]] = defaultdict(list)
+        for f in active_rows:
+            if f.get("symbol"):
+                func_map[node_key(f["file"], f["symbol"])].append(f)
+            else:
+                file_map[f["file"]].append(f)
+
+        incoming = {e["id"] for e in endpoint_dicts}
+        existing = {r["id"] for r in cur.execute("SELECT id FROM endpoints")}
+        for gone in existing - incoming:
+            cur.execute("DELETE FROM endpoint_findings WHERE endpoint_id=?", (gone,))
+            cur.execute("DELETE FROM endpoints WHERE id=?", (gone,))
+
+        for ep in endpoint_dicts:
+            row = cur.execute(
+                "SELECT first_seen FROM endpoints WHERE id=?", (ep["id"],)
+            ).fetchone()
+            first_seen = row["first_seen"] if row else now
+            cur.execute(
+                """INSERT INTO endpoints (id, method, path, framework, handler_file,
+                   handler_qualname, handler_line, first_seen, last_seen)
+                   VALUES (?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(id) DO UPDATE SET method=excluded.method,
+                   path=excluded.path, framework=excluded.framework,
+                   handler_file=excluded.handler_file,
+                   handler_qualname=excluded.handler_qualname,
+                   handler_line=excluded.handler_line, last_seen=excluded.last_seen""",
+                (ep["id"], ep["method"], ep["path"], ep["framework"],
+                 ep["handler_file"], ep["handler_qualname"], ep["handler_line"],
+                 first_seen, now),
+            )
+
+        cur.execute("DELETE FROM endpoint_findings")
+        stats: dict[str, dict] = {}
+        for ep in endpoint_dicts:
+            eid = ep["id"]
+            chain = chains.get(eid)
+            matched: dict[int, dict] = {}
+            if chain is not None:
+                touched_files: set[str] = set()
+                for nk in chain.nodes:
+                    touched_files.add(nk.split("::", 1)[0])
+                    for f in func_map.get(nk, []):
+                        matched[f["id"]] = f
+                for rel in touched_files:
+                    for f in file_map.get(rel, []):
+                        matched[f["id"]] = f
+            rows = list(matched.values())
+            cur.executemany(
+                "INSERT OR IGNORE INTO endpoint_findings(endpoint_id, finding_id)"
+                " VALUES(?,?)",
+                [(eid, f["id"]) for f in rows],
+            )
+            open_rows = [f for f in rows
+                         if f["status"] in (Status.OPEN, Status.CONFIRMED)]
+            high = sum(1 for f in open_rows if f["severity"] == "high")
+            medium = sum(1 for f in open_rows if f["severity"] == "medium")
+            score = health_score(rows)
+            depth = chain.depth if chain is not None else 0
+            node_count = chain.node_count if chain is not None else 0
+            radius = max((blast.get(nk, 1) for nk in chain.nodes), default=0) \
+                if chain is not None else 0
+            cur.execute(
+                """INSERT INTO endpoint_snapshots (endpoint_id, snapshot_id,
+                   scanned_at, score, open_count, high_count, medium_count,
+                   chain_depth, node_count, blast_radius)
+                   VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (eid, snapshot_id, now, score, len(open_rows), high, medium,
+                 depth, node_count, radius),
+            )
+            stats[eid] = {"score": score, "open": len(open_rows),
+                          "high": high, "medium": medium, "depth": depth,
+                          "nodes": node_count, "blast": radius}
+        self.conn.commit()
+        return {"endpoints": len(incoming), "with_chains": len(chains),
+                "stats": stats}
+
+    def list_endpoints(self) -> list[dict]:
+        rows = self.conn.execute(
+            """SELECT e.*, s.scanned_at AS snap_at, s.score AS score,
+                      s.open_count AS open_count, s.high_count AS high_count,
+                      s.medium_count AS medium_count, s.chain_depth AS chain_depth,
+                      s.node_count AS node_count, s.blast_radius AS blast_radius,
+                      p.score AS prev_score, p.open_count AS prev_open
+               FROM endpoints e
+               JOIN endpoint_snapshots s ON s.id = (
+                   SELECT max(id) FROM endpoint_snapshots WHERE endpoint_id = e.id)
+               LEFT JOIN endpoint_snapshots p ON p.id = (
+                   SELECT max(id) FROM endpoint_snapshots
+                   WHERE endpoint_id = e.id AND id < s.id)
+               ORDER BY s.score ASC, s.open_count DESC, e.path ASC"""
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["score_delta"] = (d["score"] - d["prev_score"]) \
+                if d["prev_score"] is not None else 0
+            d["open_delta"] = (d["open_count"] - d["prev_open"]) \
+                if d["prev_open"] is not None else 0
+            out.append(d)
+        return out
+
+    def endpoint_detail(self, endpoint_id: str) -> dict | None:
+        ep = self.conn.execute(
+            "SELECT * FROM endpoints WHERE id=?", (endpoint_id,)
+        ).fetchone()
+        if ep is None:
+            return None
+        snapshots = [
+            dict(r) for r in self.conn.execute(
+                """SELECT id, snapshot_id, scanned_at, score, open_count,
+                          high_count, medium_count, chain_depth, node_count,
+                          blast_radius
+                   FROM endpoint_snapshots WHERE endpoint_id=? ORDER BY id""",
+                (endpoint_id,),
+            ).fetchall()
+        ]
+        findings = []
+        for r in self.conn.execute(
+            """SELECT f.* FROM findings f
+               JOIN endpoint_findings ef ON ef.finding_id = f.id
+               WHERE ef.endpoint_id=?
+                 AND f.status IN ('open','confirmed','wontfix')
+               ORDER BY CASE f.status WHEN 'wontfix' THEN 1 ELSE 0 END,
+                        CASE f.severity WHEN 'high' THEN 0
+                             WHEN 'medium' THEN 1 ELSE 2 END,
+                        f.file, f.line""",
+            (endpoint_id,),
+        ).fetchall():
+            d = dict(r)
+            d["evidence"] = json.loads(d["evidence"] or "{}")
+            findings.append(d)
+        return {"endpoint": dict(ep), "snapshots": snapshots,
+                "findings": findings}
 
     def get_meta(self, key: str) -> str | None:
         r = self.conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()

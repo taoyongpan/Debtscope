@@ -115,6 +115,26 @@
 </header>
 
 <main class="container">
+  <div class="pane-tabs">
+    <button class="pane-tab active" id="tab-endpoints">接口监控</button>
+    <button class="pane-tab" id="tab-overview">项目总览</button>
+  </div>
+
+  <!-- ================= pane: interface radar ================= -->
+  <div id="pane-endpoints">
+    <section class="card ep-list-card">
+      <div class="findings-head">
+        <div class="card-title" style="margin-bottom:0">接口监控
+          <span class="muted" id="ep-count"></span></div>
+        <div class="muted" id="ep-summary" style="font-size:12px"></div>
+      </div>
+      <div id="ep-table"></div>
+    </section>
+    <section id="ep-detail" hidden></section>
+  </div>
+
+  <!-- ================= pane: project overview (legacy dashboard) ================= -->
+  <div id="pane-overview" hidden>
   <!-- KPI row -->
   <section class="kpi-row">
     <div class="card kpi-score">
@@ -202,6 +222,7 @@
     <span>Debtscope 债镜 · 数据仅保存在本机，代码不会因看板展示而外传</span>
     <span class="muted" id="foot-stats"></span>
   </footer>
+  </div><!-- /pane-overview -->
 </main>
 </div>
 

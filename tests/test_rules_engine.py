@@ -118,6 +118,48 @@ class RuleEngineTest(unittest.TestCase):
         s.enabled = False
         self.assertFalse(run_rules(idx, [s]))
 
+    def test_db_call_in_loop_positive(self):
+        src = (
+            "def list_orders(ids):\n"
+            "    for oid in ids:\n"
+            "        cur.execute('select * from o where id=?', (oid,))\n"
+            "        row = cur.fetchone()\n"
+            "        requests.get('http://svc/' + str(oid))\n"
+            "    return row\n"
+        )
+        idx = index_code({"a.py": src})
+        hits = run_rules(idx, [spec("db_call_in_loop")])
+        msgs = " ".join(h.message for h in hits)
+        self.assertTrue(hits)
+        for h in hits:
+            self.assertEqual(h.symbol, "list_orders")
+        self.assertIn("cur.execute", msgs)
+        self.assertIn("requests.get", msgs)
+
+    def test_db_call_in_loop_negative_cases(self):
+        # pure-computation loop: no I/O, no hit
+        idx = index_code({"a.py": "def f(xs):\n    return [len(x) for x in xs]\n"})
+        self.assertFalse(run_rules(idx, [spec("db_call_in_loop")]))
+        # I/O inside a nested function defined in a loop is not loop I/O
+        src = (
+            "def f(xs):\n"
+            "    for x in xs:\n"
+            "        def g():\n"
+            "            cur.execute('q')\n"
+            "        yield g\n"
+        )
+        idx = index_code({"a.py": src})
+        self.assertFalse(run_rules(idx, [spec("db_call_in_loop")]))
+        # I/O outside any loop is fine
+        idx = index_code({"a.py": "def f():\n    cur.execute('q')\n"})
+        self.assertFalse(run_rules(idx, [spec("db_call_in_loop")]))
+
+    def test_swallowed_exception_has_symbol(self):
+        idx = index_code({"a.py": "def f():\n    try:\n        x()\n    except Exception:\n        pass\n"})
+        hits = run_rules(idx, [spec("swallowed_exception")])
+        self.assertTrue(hits)
+        self.assertEqual(hits[0].symbol, "f")
+
 
 if __name__ == "__main__":
     unittest.main()

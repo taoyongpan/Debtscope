@@ -13,6 +13,7 @@ import re
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 
+from .callgraph import classify_io
 from .models import Confidence, Finding, Severity
 from .python_indexer import Index
 
@@ -170,6 +171,14 @@ KINDS: dict[str, KindMeta] = {
         default_params={"target": "function", "regex": r"^[a-z_][a-z0-9_]*$",
                         "message": "函数名应使用 snake_case"},
     ),
+    "db_call_in_loop": KindMeta(
+        label="循环内数据库/HTTP 调用（疑似 N+1）",
+        description_template="循环体内直接执行数据库或 HTTP 调用，访问次数随数据量线性放大",
+        suggestion="改为批量查询（IN 列表 / executemany / join）或批量 HTTP 接口，"
+                   "消除每次迭代一次 I/O 的 N+1 模式。",
+        default_severity=Severity.MEDIUM, params_schema={}, default_params={},
+        creatable=False,
+    ),
 }
 
 
@@ -215,6 +224,10 @@ BUILTIN_SPECS: list[RuleSpec] = [
              severity=Severity.LOW, params={"min_lines": 8, "min_stmts": 4},
              description="与另一处函数体结构完全一致，疑似复制粘贴",
              suggestion=KINDS["duplicate_function"].suggestion),
+    RuleSpec(id="db_call_in_loop", name="循环内数据库/HTTP 调用（疑似 N+1）",
+             kind="db_call_in_loop", severity=Severity.MEDIUM,
+             description=KINDS["db_call_in_loop"].description_template,
+             suggestion=KINDS["db_call_in_loop"].suggestion),
 ]
 
 
@@ -316,9 +329,12 @@ def check_unused_function(idx: Index, spec: RuleSpec) -> list[Finding]:
 def check_swallowed_exception(idx: Index, spec: RuleSpec) -> list[Finding]:
     out: list[Finding] = []
     for rel, tree in _trees(idx):
+        parents = _parent_map(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.ExceptHandler):
                 continue
+            fn = _enclosing_function(parents, node)
+            symbol = fn.name if fn else ""
             effective = _effective_body(node)
             only_pass = bool(effective) and all(
                 isinstance(s, ast.Pass)
@@ -328,7 +344,7 @@ def check_swallowed_exception(idx: Index, spec: RuleSpec) -> list[Finding]:
             )
             if node.type is None:
                 out.append(_f(
-                    spec, file=rel, line=node.lineno,
+                    spec, file=rel, line=node.lineno, symbol=symbol,
                     message="裸 except 会吞掉 SystemExit/KeyboardInterrupt 等所有异常"
                             + ("，且异常被直接 pass 吞没" if only_pass else ""),
                     evidence={"snippet": _handler_snippet(node, idx.source[rel])},
@@ -336,7 +352,7 @@ def check_swallowed_exception(idx: Index, spec: RuleSpec) -> list[Finding]:
             elif only_pass:
                 exc = ast.unparse(node.type) if hasattr(ast, "unparse") else "异常"
                 out.append(_f(
-                    spec, file=rel, line=node.lineno,
+                    spec, file=rel, line=node.lineno, symbol=symbol,
                     message=f"捕获 {exc} 后直接 pass，异常被静默吞没",
                     evidence={"snippet": _handler_snippet(node, idx.source[rel])},
                 ))
@@ -557,6 +573,75 @@ def check_name_convention(idx: Index, spec: RuleSpec) -> list[Finding]:
     return out
 
 
+def _loop_direct_calls(loop: ast.AST) -> list[ast.Call]:
+    """Calls in this loop's own iteration body.
+
+    Nested loops are pruned (their calls belong to the inner loop's finding);
+    nested function/lambda defs are pruned too (they are not executed per
+    iteration at this point).
+    """
+    prune = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda,
+             ast.For, ast.AsyncFor, ast.While)
+    calls: list[ast.Call] = []
+
+    def walk(node: ast.AST):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, prune):
+                continue
+            if isinstance(child, ast.Call):
+                calls.append(child)
+            walk(child)
+
+    for stmt in loop.body:
+        if isinstance(stmt, prune):
+            continue
+        walk(stmt)
+    return calls
+
+
+def check_db_call_in_loop(idx: Index, spec: RuleSpec) -> list[Finding]:
+    out: list[Finding] = []
+    for rel, tree in _trees(idx):
+        parents = _parent_map(tree)
+        lines = idx.source[rel]
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
+                continue
+            hits: list[dict] = []
+            seen_labels: set[str] = set()
+            for call in _loop_direct_calls(node):
+                try:
+                    chain = ast.unparse(call.func)
+                except Exception:
+                    chain = _call_name(call)
+                io = classify_io(chain)
+                if io and chain not in seen_labels:
+                    seen_labels.add(chain)
+                    hits.append({"line": call.lineno, "io": io, "call": chain})
+            if not hits:
+                continue
+            fn = _enclosing_function(parents, node)
+            loop_word = "while" if isinstance(node, ast.While) else "for"
+            end = node.end_lineno or node.lineno
+            io_zh = {"db": "数据库", "http": "HTTP"}
+            kinds = "/".join(sorted({io_zh.get(h["io"], h["io"]) for h in hits}))
+            labels = "、".join(h["call"] for h in hits[:6])
+            out.append(_f(
+                spec, file=rel, line=node.lineno,
+                symbol=fn.name if fn else "",
+                confidence=Confidence.MEDIUM,
+                message=f"第 {node.lineno} 行 {loop_word} 循环体内有 {len(hits)} 处"
+                        f"{kinds}调用（{labels}），随迭代次数线性放大，疑似 N+1",
+                evidence={
+                    "snippet": "\n".join(lines[node.lineno - 1: end])[:900],
+                    "io_calls": hits,
+                },
+                suggestion="将循环内查询改为批量查询（IN 列表 / executemany / JOIN），"
+                           "HTTP 调用改为批量接口或一次性并发聚合，避免每次迭代都产生 I/O。",
+            ))
+    return out
+
+
 CHECKS = {
     "unused_function": check_unused_function,
     "swallowed_exception": check_swallowed_exception,
@@ -570,6 +655,7 @@ CHECKS = {
     "nested_too_deep": check_nested_too_deep,
     "forbidden_call": check_forbidden_call,
     "name_convention": check_name_convention,
+    "db_call_in_loop": check_db_call_in_loop,
 }
 
 

@@ -42,6 +42,7 @@ def _cmd_scan(args: argparse.Namespace) -> int:
 def _print_summary(s: dict) -> None:
     rev = s["review"]
     print(f"  files {s['files']} | LOC {s['loc']} | symbols {s['symbols']}"
+          f" | endpoints {s.get('endpoints', 0)}"
           + (f" | commit {s['commit']}" if s["commit"] else ""))
     if s["parse_errors"]:
         print(f"  ! {len(s['parse_errors'])} file(s) failed to parse")
@@ -66,6 +67,35 @@ def _print_summary(s: dict) -> None:
             name = RULE_NAMES.get(rule_id, rule_id)
             sev = RULE_SEV.get(rule_id, "?")
             print(f"    {name:<22} {n:>4}  [{sev}]")
+
+
+def _cmd_endpoints(args: argparse.Namespace) -> int:
+    """List HTTP entry points and chain stats — pure static, no DB, no LLM."""
+    from .core.callgraph import build_all_chains, build_call_graph
+    from .core.endpoints import discover_endpoints
+    from .core.python_indexer import PythonIndexer
+
+    root = os.path.abspath(args.path)
+    if not os.path.isdir(root):
+        print(f"error: not a directory: {root}", file=sys.stderr)
+        return 2
+    idx = PythonIndexer().index(root)
+    cg = build_call_graph(idx)
+    eps = discover_endpoints(idx)
+    chains = build_all_chains(cg, eps)
+    if not eps:
+        print("No HTTP endpoints discovered "
+              "(supported: Flask @app.route/blueprints, FastAPI @app.get/APIRouter, @route).")
+        return 0
+    print(f"{'METHOD':<7} {'PATH':<38} {'FRAMEWORK':<9} {'DEPTH':>5} {'NODES':>5}  HANDLER")
+    for e in eps:
+        ch = chains.get(e.id)
+        depth = ch.depth if ch else 0
+        nodes = ch.node_count if ch else 0
+        print(f"{e.method:<7} {e.path:<38} {e.framework:<9} {depth:>5} {nodes:>5}  "
+              f"{e.handler_file}:{e.handler_qualname}:{e.handler_line}")
+    print(f"\n{len(eps)} endpoint(s) across {len(idx.files)} file(s)")
+    return 0
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
@@ -230,6 +260,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     rl = sub.add_parser("rules", help="list built-in rules")
     rl.set_defaults(func=_cmd_rules)
+
+    ep = sub.add_parser("endpoints",
+                        help="list HTTP entry points and call-chain stats (static, no DB)")
+    ep.add_argument("path", help="repository root")
+    ep.set_defaults(func=_cmd_endpoints)
 
     cf = sub.add_parser("config", help="configure model endpoint (interactive wizard)")
     cf.add_argument("--show", action="store_true", help="show effective configuration")

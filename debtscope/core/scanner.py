@@ -1,4 +1,8 @@
-"""Scan orchestration: index -> rules -> review -> reconcile -> snapshot."""
+"""Scan orchestration: index -> call graph -> entry points -> rules -> review.
+
+Then reconcile findings, snapshot project health, build per-endpoint call
+chains and attach debt onto chain nodes (interface radar).
+"""
 from __future__ import annotations
 
 import subprocess
@@ -6,6 +10,8 @@ from datetime import datetime
 
 from ..config import Config
 from . import health
+from .callgraph import build_all_chains, build_call_graph, blast_radius
+from .endpoints import discover_endpoints
 from .python_indexer import PythonIndexer
 from .reviewer import review
 from .rules import RuleSpec, run_rules
@@ -29,6 +35,10 @@ def scan_repo(root: str, db_path: str, use_llm: bool = True) -> dict:
     indexer = PythonIndexer()
     idx = indexer.index(root)
 
+    # static interface layer (never executes project code)
+    cg = build_call_graph(idx)
+    endpoints = discover_endpoints(idx)
+
     store = Storage(db_path)
     try:
         store.seed_rules()
@@ -44,6 +54,7 @@ def scan_repo(root: str, db_path: str, use_llm: bool = True) -> dict:
             "files": len(idx.files),
             "loc": idx.n_lines,
             "symbols": len(idx.symbols),
+            "endpoints": len(endpoints),
             "parse_errors": idx.parse_errors,
             "candidates": review_stats.candidates,
             "llm_enabled": cfg.llm_enabled,
@@ -57,7 +68,7 @@ def scan_repo(root: str, db_path: str, use_llm: bool = True) -> dict:
             "rules_custom": sum(1 for s in specs if not s.builtin),
             **agg,
         }
-        store.add_snapshot(
+        snapshot = store.add_snapshot(
             commit=commit,
             score=score,
             total_open=len(active),
@@ -65,6 +76,14 @@ def scan_repo(root: str, db_path: str, use_llm: bool = True) -> dict:
             resolved_count=counts["resolved"],
             stats=stats,
         )
+
+        # pin debt onto interface chains
+        chains = build_all_chains(cg, endpoints)
+        blast = blast_radius(chains)
+        ep_summary = store.reconcile_endpoints(
+            [e.to_dict() for e in endpoints], chains, blast, active, snapshot.id
+        )
+
         store.set_meta("repo_root", root)
         store.set_meta("last_scan", datetime.now().isoformat(timespec="seconds"))
     finally:
@@ -76,6 +95,8 @@ def scan_repo(root: str, db_path: str, use_llm: bool = True) -> dict:
         "files": len(idx.files),
         "loc": idx.n_lines,
         "symbols": len(idx.symbols),
+        "endpoints": len(endpoints),
+        "chains": ep_summary["with_chains"],
         "parse_errors": idx.parse_errors,
         "candidates": review_stats.candidates,
         "kept": len(kept),

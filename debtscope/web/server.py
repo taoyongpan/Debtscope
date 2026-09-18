@@ -17,6 +17,10 @@ from urllib.parse import parse_qs, urlparse
 
 from .. import __version__
 from ..core import health
+from ..core.callgraph import (
+    blast_radius, build_all_chains, build_call_graph, build_chain, node_key,
+)
+from ..core.endpoints import discover_endpoints
 from ..core.python_indexer import PythonIndexer
 from ..core.storage import Storage
 
@@ -343,6 +347,11 @@ def build_handler(registry, initial_pid: str | None = None):
                     return self._code(project, qs)
                 if resource == "rules":
                     return self._rules_list(store)
+                if resource == "endpoints":
+                    if len(parts) == 4:
+                        return self._endpoints_list(store)
+                    if len(parts) == 5:
+                        return self._endpoint_detail(project, store, parts[4], pid)
                 self.send_error(404)
             finally:
                 store.close()
@@ -436,6 +445,77 @@ def build_handler(registry, initial_pid: str | None = None):
 
         def _snapshots(self, store):
             self._json({"snapshots": store.list_snapshots(50)})
+
+        # -- interface radar -------------------------------------------------
+
+        def _endpoints_list(self, store):
+            self._json({"endpoints": store.list_endpoints()})
+
+        def _endpoint_detail(self, project, store, eid: str, pid: str):
+            data = store.endpoint_detail(eid)
+            if data is None:
+                self._json({"error": "endpoint not found"}, status=404); return
+            idx = get_index(pid, project)
+            cg = build_call_graph(idx)
+            all_eps = discover_endpoints(idx)
+            all_chains = build_all_chains(cg, all_eps)
+            blast = blast_radius(all_chains)
+
+            ep = data["endpoint"]
+            root = node_key(ep["handler_file"], ep["handler_qualname"])
+            chain = build_chain(cg, root) if root in cg.symbols else None
+
+            node_findings: dict[str, list] = {}
+            file_findings: dict[str, list] = {}
+
+            def brief(f):
+                return {"id": f["id"], "rule_id": f["rule_id"], "severity": f["severity"],
+                        "status": f["status"], "confidence": f["confidence"],
+                        "line": f["line"], "symbol": f.get("symbol", ""),
+                        "message": f["message"]}
+
+            for f in data["findings"]:
+                if f.get("symbol"):
+                    node_findings.setdefault(
+                        node_key(f["file"], f["symbol"]), []).append(brief(f))
+                else:
+                    file_findings.setdefault(f["file"], []).append(brief(f))
+
+            nodes, ext_nodes, edges = [], [], []
+            if chain is not None:
+                for key, depth in chain.nodes.items():
+                    sym = cg.symbols.get(key)
+                    rel, qual = key.split("::", 1)
+                    nodes.append({
+                        "key": key, "name": qual.split(".")[-1], "qualname": qual,
+                        "file": rel, "line": sym.lineno if sym else 0,
+                        "end_line": sym.end_lineno or sym.lineno if sym else 0,
+                        "depth": depth, "kind": sym.kind if sym else "function",
+                        "n_lines": sym.n_lines if sym else 0,
+                        "n_args": sym.n_args if sym else 0,
+                        "max_depth": sym.max_depth if sym else 0,
+                        "blast": blast.get(key, 1),
+                        "findings": node_findings.get(key, []),
+                    })
+                ext_nodes = [{"key": k, **v} for k, v in chain.ext.items()]
+                edges = chain.edges
+
+            latest = data["snapshots"][-1] if data["snapshots"] else {}
+            self._json({
+                "endpoint": ep,
+                "latest": latest,
+                "trend": [{"scanned_at": s["scanned_at"], "score": s["score"],
+                           "open_count": s["open_count"], "high_count": s["high_count"],
+                           "medium_count": s["medium_count"],
+                           "chain_depth": s["chain_depth"], "node_count": s["node_count"],
+                           "blast_radius": s["blast_radius"]}
+                          for s in data["snapshots"]],
+                "findings": data["findings"],
+                "file_findings": file_findings,
+                "chain": {"nodes": nodes, "ext_nodes": ext_nodes, "edges": edges,
+                          "depth": chain.depth if chain else 0,
+                          "node_count": chain.node_count if chain else 0},
+            })
 
         def _code(self, project, qs):
             rel = qs.get("file", [None])[0]

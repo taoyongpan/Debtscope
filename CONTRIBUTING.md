@@ -27,9 +27,11 @@ python -m unittest discover -s tests -v
 ```
 
 - `tests/test_smoke.py`：demo 仓库端到端扫描、重复扫描幂等、误报抑制
-- `tests/test_rules_engine.py`：12 类检测器在合成代码上的命中 / 反例
+- `tests/test_rules_engine.py`：13 类检测器在合成代码上的命中 / 反例
+- `tests/test_callgraph.py`：导入解析、调用边、DB / HTTP 汇点分类、BFS 链路、防环、影响面
+- `tests/test_endpoints.py`：Flask 蓝图双前缀、FastAPI 路由前缀、通用 `@route`、demo 11 接口断言
 - `tests/test_llm_parse.py`：模型协议解析与失败兜底（mock，不联网）
-- `tests/test_web_api.py`：本地 HTTP API、安全校验、指标生命周期
+- `tests/test_web_api.py`：本地 HTTP API、安全校验、指标生命周期、接口雷达 API
 - `tests/test_config_presets.py`：模型预设与配置文件读写
 
 提交前请确保：测试全绿、`python -m compileall -q debtscope` 无错。
@@ -40,17 +42,19 @@ python -m unittest discover -s tests -v
 debtscope/
   core/
     python_indexer.py   # L1：AST 索引（符号、调用名、结构指纹、TODO）
+    callgraph.py        # L1：静态调用图（导入解析、调用边、DB/HTTP 汇点、BFS 链路、影响面）
+    endpoints.py        # L1：HTTP 入口发现（Flask / FastAPI / 通用 @route、前缀拼接）
     rules.py            # L2：数据驱动的确定性规则引擎（检测器注册表）
     reviewer.py         # L3：仅对「疑似废弃函数」做 LLM 精判
     llm.py              #    OpenAI 兼容客户端（stdlib urllib）
-    storage.py          #    SQLite：问题台账 / 快照 / 规则 / 反馈
+    storage.py          #    SQLite：问题台账 / 快照 / 规则 / 反馈 / 接口与接口快照
     health.py           #    透明加权扣分的健康分
-    scanner.py          # 编排：索引 → 规则 → 精判 → 对账 → 快照
+    scanner.py          # 编排：索引 → 入口/调用图 → 规则 → 精判 → 对账 → 快照
   harness/
     config_store.py     # 模型预设与 ~/.debtscope/config.json（权限 600）
     projects.py         # 多项目注册表
-  web/                  # stdlib http.server + 原生 JS 看板（无构建步骤）
-  cli.py                # scan / serve / rules / config / doctor
+  web/                  # stdlib http.server + 原生 JS 看板（无构建步骤，SVG 手写）
+  cli.py                # scan / serve / endpoints / rules / config / doctor
 ```
 
 ## 新增一个确定性检测器
@@ -64,6 +68,7 @@ debtscope/
 ## 设计原则
 
 - **确定性内核 + Agent 外壳**：AST / 调用图做全量粗筛，LLM 只精判极少数候选，任何模型失败都不得阻断扫描。
+- **只做静态分析**：不运行被扫描代码、不插桩、不采集 QPS / 延迟等运行时指标，不做 APM。
 - **数据不出本机**：Key 仅存于 `~/.debtscope/config.json`（chmod 600），仓库代码不会被上传。
 - **零依赖**：标准库能解决的问题不引入第三方包；前端不引入框架与构建链。
 - **证据可追溯**：每条问题都带文件、行号、代码片段与修复建议。

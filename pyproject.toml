@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "debtscope"
-version = "0.3.1"
+version = "0.4.0"
 description = "AI-powered technical debt dashboard: one sentence to define a metric, one scan to see the trend."
 readme = "README.md"
 requires-python = ">=3.10"

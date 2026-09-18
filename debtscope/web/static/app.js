@@ -7,6 +7,12 @@ const state = {
   overview: null,
   ruleMap: {},
   findings: [],
+  endpoints: [],
+  endpointDetail: null,
+  chainFilter: null,
+  chainExpanded: new Set(),
+  pane: "endpoints",
+  epOpened: false,
   filters: { rule: "", severity: "", confidence: "", q: "",
              status: "open,confirmed,wontfix" },
   expanded: new Set(),
@@ -323,16 +329,29 @@ async function loadAll() {
   if (f.q) params.set("q", f.q);
   params.set("status", f.status);
 
-  const [overview, rulesResp, findingsResp] = await Promise.all([
+  const [overview, rulesResp, findingsResp, epsResp] = await Promise.all([
     api(P("/overview")),
     api(P("/rules")),
     api(P("/findings?" + params.toString())),
+    api(P("/endpoints")),
   ]);
   state.overview = overview;
   state.ruleMap = {};
   rulesResp.rules.forEach((r) => { state.ruleMap[r.id] = r; });
   state.findings = findingsResp.findings;
+  state.endpoints = epsResp.endpoints || [];
   render();
+  renderEndpointList();
+  if (state.endpointDetail) {
+    await openEndpoint(state.endpointDetail.endpoint.id, { keepScroll: true });
+  } else {
+    const epm = location.search.match(/[?&]ep=([^&]+)/);
+    if (epm && !state.epOpened && state.endpoints.length) {
+      state.epOpened = true;
+      const target = state.endpoints.find((x) => x.id === epm[1]);
+      if (target) { switchPane("endpoints"); await openEndpoint(target.id); }
+    }
+  }
   const hm = location.hash.match(/^#finding-(\d+)$/);
   if (hm && state.findings.some((x) => x.id === Number(hm[1]))) {
     const id = Number(hm[1]);
@@ -601,6 +620,368 @@ async function rescan() {
   } finally {
     btn.disabled = false; btn.textContent = "重新扫描";
   }
+}
+
+// ===========================================================================
+// interface radar (code-dimension monitoring)
+// ===========================================================================
+
+const METHOD_STYLE = {
+  GET: "m-get", POST: "m-post", PUT: "m-put", PATCH: "m-put",
+  DELETE: "m-delete", ANY: "m-any",
+};
+const FRAMEWORK_LABEL = { flask: "Flask", fastapi: "FastAPI", generic: "route" };
+const SCORE_W = { high: 5, medium: 2, low: 1 };
+
+function methodClass(m) {
+  if (METHOD_STYLE[m]) return METHOD_STYLE[m];
+  return m.includes("/") ? "m-multi" : "m-any";
+}
+function liveScore(findings) {
+  let pen = 0;
+  (findings || []).forEach((f) => {
+    if ((f.status === "open" || f.status === "confirmed") && f.confidence !== "low")
+      pen += SCORE_W[f.severity] || 1;
+  });
+  return Math.max(0, 100 - pen);
+}
+function topSev(findings) {
+  const ranks = { high: 3, medium: 2, low: 1 };
+  let top = null;
+  (findings || []).forEach((f) => {
+    if (f.status === "wontfix") return;
+    if (!top || (ranks[f.severity] || 0) > (ranks[top] || 0)) top = f.severity;
+  });
+  return top;
+}
+
+$("tab-endpoints").addEventListener("click", () => switchPane("endpoints"));
+$("tab-overview").addEventListener("click", () => switchPane("overview"));
+
+function switchPane(name) {
+  state.pane = name;
+  $("pane-endpoints").hidden = name !== "endpoints";
+  $("pane-overview").hidden = name !== "overview";
+  $("tab-endpoints").classList.toggle("active", name === "endpoints");
+  $("tab-overview").classList.toggle("active", name === "overview");
+}
+
+function renderEndpointList() {
+  const eps = state.endpoints;
+  $("ep-count").textContent = "（" + eps.length + " 个接口）";
+  const risky = eps.filter((e) => e.open_count > 0).length;
+  $("ep-summary").textContent = eps.length
+    ? risky + " 个接口链路上存在待治理问题 · 按健康分升序"
+    : "";
+  if (!eps.length) {
+    $("ep-table").innerHTML =
+      '<div class="empty">未在仓库中发现 HTTP 入口。<br>接口雷达支持 Flask（@app.route / 蓝图）、' +
+      "FastAPI（@app.get / APIRouter）与通用 @route 装饰器；识别到 Web 入口后将自动激活。</div>";
+    return;
+  }
+  const rows = eps.map((e) => {
+    const delta = e.score_delta
+      ? '<span class="ep-delta ' + (e.score_delta > 0 ? "up" : "down") + '">' +
+        (e.score_delta > 0 ? "▲" : "▼") + Math.abs(e.score_delta) + "</span>"
+      : '<span class="ep-delta flat">·</span>';
+    return '<tr class="ep-row" data-eid="' + e.id + '">' +
+      '<td style="width:24px"><span class="ep-dot" style="background:' + scoreColor(e.score) + '"></span></td>' +
+      '<td style="width:78px"><span class="method-badge ' + methodClass(e.method) + '">' + esc(e.method) + "</span></td>" +
+      '<td class="ep-path">' + esc(e.path) + delta + "</td>" +
+      '<td style="width:84px"><span class="tag fw-' + e.framework + '">' + (FRAMEWORK_LABEL[e.framework] || e.framework) + "</span></td>" +
+      '<td class="ep-handler" title="' + esc(e.handler_file) + ":" + esc(e.handler_qualname) + '">' +
+        esc(e.handler_file) + ":" + esc(e.handler_qualname) + "</td>" +
+      '<td style="width:64px"><span class="ep-score" style="color:' + scoreColor(e.score) + '">' + e.score + "</span></td>" +
+      '<td style="width:70px">' +
+        (e.high_count ? '<b class="t-high">' + e.high_count + " 高</b> " : "") +
+        (e.medium_count ? '<b class="t-medium">' + e.medium_count + " 中</b>" : "") +
+        (!e.high_count && !e.medium_count ? '<span class="muted">0</span>' : "") + "</td>" +
+      '<td style="width:56px;text-align:right">' + e.chain_depth + "</td>" +
+      '<td style="width:78px;text-align:right">' +
+        (e.blast_radius >= 2 ? '<span class="blast-hot" title="该链路上的热点函数被多个接口共用">' + e.blast_radius + " 接口</span>"
+                            : '<span class="muted">' + e.blast_radius + "</span>") + "</td>" +
+      "</tr>";
+  }).join("");
+  $("ep-table").innerHTML =
+    "<table><tr><th></th><th>方法</th><th>路径</th><th>框架</th><th>处理函数</th>" +
+    "<th>健康分</th><th>问题</th><th style='text-align:right'>链深</th><th style='text-align:right'>影响面</th></tr>" +
+    rows + "</table>";
+  document.querySelectorAll("tr.ep-row").forEach((tr) =>
+    tr.addEventListener("click", () => openEndpoint(tr.dataset.eid)));
+}
+
+async function openEndpoint(eid, opts) {
+  opts = opts || {};
+  const detail = await api(P("/endpoints/" + eid));
+  state.endpointDetail = detail;
+  if (!opts.keepScroll) {
+    state.chainFilter = null;
+    state.chainExpanded = new Set();
+  }
+  $("ep-detail").hidden = false;
+  renderEndpointDetail();
+  if (!opts.keepScroll) {
+    $("ep-detail").scrollIntoView({ behavior: opts.smooth ? "smooth" : "auto",
+                                    block: "start" });
+  }
+}
+
+function backToList() {
+  state.endpointDetail = null;
+  state.chainFilter = null;
+  $("ep-detail").hidden = true;
+}
+
+function sparkline(trend) {
+  const pts = trend || [];
+  if (pts.length < 2) return '<span class="muted" style="font-size:11px">第二次扫描后展示趋势</span>';
+  const W = 200, H = 44, pad = 6;
+  const xs = pts.map((_, i) => pad + i * (W - pad * 2) / Math.max(1, pts.length - 1));
+  const ys = pts.map((p) => pad + (100 - p.score) / 100 * (H - pad * 2));
+  const line = xs.map((x, i) => (i ? "L" : "M") + x.toFixed(1) + "," + ys[i].toFixed(1)).join(" ");
+  const dots = xs.map((x, i) =>
+    '<circle cx="' + x.toFixed(1) + '" cy="' + ys[i].toFixed(1) + '" r="2.5" fill="' +
+    scoreColor(pts[i].score) + '"><title>' + pts[i].scanned_at + " · " + pts[i].score + "分</title></circle>").join("");
+  return '<svg viewBox="0 0 ' + W + " " + H + '" width="200" height="44">' +
+    '<path d="' + line + '" fill="none" stroke="#39c5cf" stroke-width="1.6"/>' + dots + "</svg>";
+}
+
+function renderEndpointDetail() {
+  const d = state.endpointDetail;
+  const ep = d.endpoint, latest = d.latest || {};
+  const score = liveScore(d.findings);
+  const open = d.findings.filter((f) => f.status === "open" || f.status === "confirmed");
+  const high = open.filter((f) => f.severity === "high").length;
+  const medium = open.filter((f) => f.severity === "medium").length;
+  const fileGroups = d.file_findings || {};
+
+  const kpi = (label, value, cls) =>
+    '<div class="epk"><div class="epk-num ' + (cls || "") + '">' + value + "</div>" +
+    '<div class="epk-label">' + label + "</div></div>";
+
+  const head =
+    '<div class="card ep-detail-head">' +
+      '<button class="btn tiny ghost" id="ep-back">← 返回接口列表</button>' +
+      '<div class="epd-title">' +
+        '<span class="method-badge ' + methodClass(ep.method) + '">' + esc(ep.method) + "</span>" +
+        '<span class="epd-path">' + esc(ep.path) + "</span>" +
+        '<span class="tag fw-' + ep.framework + '">' + (FRAMEWORK_LABEL[ep.framework] || ep.framework) + "</span>" +
+      "</div>" +
+      '<div class="epd-handler muted">入口：' + esc(ep.handler_file) + ":" +
+        esc(ep.handler_qualname) + "（第 " + ep.handler_line + " 行）· 静态调用链，不运行代码</div>" +
+      '<div class="epd-kpis">' +
+        kpi("实时健康分", score, score < 75 ? "t-medium" : score < 60 ? "t-high" : "t-good") +
+        kpi("待治理", open.length, open.length ? "t-medium" : "t-good") +
+        kpi("高 / 中", high + " / " + medium, high ? "t-high" : "") +
+        kpi("链路深度", d.chain.depth) +
+        kpi("链上节点", d.chain.node_count) +
+        kpi("最大影响面", (latest.blast_radius ?? 1) + " 接口",
+            (latest.blast_radius || 1) >= 2 ? "t-high" : "") +
+      "</div>" +
+      '<div class="epd-trend"><span class="muted" style="font-size:11px">健康分趋势　</span>' +
+        sparkline(d.trend) + "</div>" +
+    "</div>";
+
+  const chainCard =
+    '<div class="card ep-chain-card"><div class="card-title">调用链路与债务分布' +
+      '<span class="muted" style="margin-left:8px;font-weight:400">矩形=项目内函数（顶条颜色=该节点最高问题），' +
+      "胶囊=数据库 / HTTP 外部调用；点击节点可筛选优化点</span></div>" +
+      '<div class="chain-scroll">' + renderChainSvg(d) + "</div>" +
+      '<div class="chain-legend"><span><i class="cl-db"></i>数据库调用</span>' +
+      '<span><i class="cl-http"></i>HTTP 调用</span>' +
+      '<span><i class="cl-blast"></i>热点（多接口共用）</span></div></div>';
+
+  const filterBar = state.chainFilter
+    ? '<div class="chain-filter-bar">仅看节点 ' +
+      '<code>' + esc(state.chainFilter.split("::", 2)[1] || state.chainFilter) + "</code>" +
+      '<button class="btn tiny ghost" id="ep-clear-filter">清除筛选</button></div>' : "";
+
+  const visible = state.chainFilter
+    ? d.findings.filter((f) => f.symbol &&
+        (f.file + "::" + f.symbol) === state.chainFilter)
+    : d.findings.filter((f) => f.symbol);
+  const fileRows = state.chainFilter ? [] : Object.keys(fileGroups).sort();
+
+  const findingRow = (f) => {
+    const rule = state.ruleMap[f.rule_id] || { name: f.rule_id };
+    const openEx = state.chainExpanded.has(f.id);
+    return '<tr class="finding-row ep-finding" data-id="' + f.id + '">' +
+      '<td style="width:26px"><span class="sev ' + f.severity + '"></span></td>' +
+      '<td style="width:170px"><span class="rule-name">' + esc(rule.name || f.rule_id) + "</span>" +
+        '<span class="conf-tag ' + f.confidence + '">' +
+        ({ high: "高置信", medium: "中置信", low: "低置信" }[f.confidence] || f.confidence) + "</span></td>" +
+      '<td><div class="msg">' + esc(f.message) + "</div></td>" +
+      '<td style="width:210px"><span class="loc">' + esc(f.file) + ":" + f.line + "</span></td>" +
+      '<td style="width:84px"><span class="status-tag status-' + f.status + '">' +
+        (STATUS_LABEL[f.status] || f.status) + "</span></td></tr>" +
+      '<tr class="detail-row" data-detail="' + f.id + '" style="' + (openEx ? "" : "display:none") + '">' +
+      '<td colspan="5"><div class="detail-box" id="ep-detail-box-' + f.id + '"></div></td></tr>';
+  };
+
+  const optCard =
+    '<div class="card ep-opt-card"><div class="card-title">链路优化点 <span class="muted">（' +
+      open.length + ' 个待治理 / 共 ' + d.findings.length + " 条记录）</span></div>" +
+      filterBar +
+      (visible.length
+        ? "<table><tr><th></th><th>类型</th><th>问题</th><th>位置</th><th>状态</th></tr>" +
+          visible.map(findingRow).join("") + "</table>"
+        : '<div class="empty">该节点没有待处理问题</div>');
+
+  let fileCard = "";
+  if (fileRows.length) {
+    const items = fileRows.flatMap((rel) =>
+      fileGroups[rel].map((f) => {
+        const full = d.findings.find((x) => x.id === f.id) || f;
+        return findingRow(full);
+      }));
+    fileCard =
+      '<div class="card ep-opt-card" style="margin-top:14px"><div class="card-title">链上文件级问题' +
+        '<span class="muted" style="margin-left:8px;font-weight:400">无法定位到单个函数（如 TODO 堆积、文件过长）</span></div>' +
+        "<table><tr><th></th><th>类型</th><th>问题</th><th>位置</th><th>状态</th></tr>" +
+        items.join("") + "</table></div>";
+  }
+  if (!visible.length && !fileRows.length) {
+    fileCard = '<div class="card ep-opt-card"><div class="empty">该接口链路上没有发现技术债，继续保持。</div></div>';
+  }
+
+  $("ep-detail").innerHTML = head + chainCard + optCard + fileCard;
+  $("ep-back").addEventListener("click", backToList);
+  const clearBtn = $("ep-clear-filter");
+  if (clearBtn) clearBtn.addEventListener("click", () => { state.chainFilter = null; renderEndpointDetail(); });
+  document.querySelectorAll("#ep-detail .chain-node").forEach((g) =>
+    g.addEventListener("click", () => {
+      const key = g.dataset.key;
+      state.chainFilter = state.chainFilter === key ? null : key;
+      renderEndpointDetail();
+    }));
+  document.querySelectorAll("#ep-detail tr.ep-finding").forEach((tr) =>
+    tr.addEventListener("click", () => toggleChainDetail(Number(tr.dataset.id))));
+}
+
+function renderChainSvg(d) {
+  const ch = d.chain;
+  const NW = 202, NH = 58, EW = 176, EH = 36, GX = 252, GY = 90, PAD = 28;
+  const items = [];
+  ch.nodes.forEach((n) => items.push({ depth: n.depth, type: "node", key: n.key, data: n }));
+  (ch.ext_nodes || []).forEach((n) => items.push({ depth: n.depth, type: "ext", key: n.key, data: n }));
+  const cols = {};
+  items.forEach((it) => { (cols[it.depth] ||= []).push(it); });
+  const depths = Object.keys(cols).map(Number).sort((a, b) => a - b);
+  const pos = {};
+  let maxRows = 0;
+  depths.forEach((depth) => {
+    const col = cols[depth];
+    maxRows = Math.max(maxRows, col.length);
+    col.forEach((it, i) => {
+      const w = it.type === "ext" ? EW : NW, h = it.type === "ext" ? EH : NH;
+      pos[it.key] = { x: PAD + depth * GX, y: PAD + i * GY, w, h, it };
+    });
+  });
+  const maxDepth = depths.length ? depths[depths.length - 1] : 0;
+  const width = PAD * 2 + maxDepth * GX + NW;
+  const height = PAD * 2 + (Math.max(1, maxRows) - 1) * GY + NH;
+
+  const findingByKey = {};
+  d.findings.forEach((f) => {
+    if (!f.symbol) return;
+    (findingByKey[f.file + "::" + f.symbol] ||= []).push(f);
+  });
+
+  const edgePath = (a, b) => {
+    const x1 = a.x + a.w, y1 = a.y + a.h / 2, x2 = b.x, y2 = b.y + b.h / 2;
+    const mx = (x1 + x2) / 2;
+    return "M" + x1 + "," + y1 + " C" + mx + "," + y1 + " " + mx + "," + y2 + " " + x2 + "," + y2;
+  };
+  const edges = [];
+  ch.edges.forEach((e) => {
+    const a = pos[e.from], b = pos[e.to];
+    if (!a || !b) return;
+    edges.push('<path class="chain-edge" d="' + edgePath(a, b) + '"/>');
+  });
+  (ch.ext_nodes || []).forEach((n) => {
+    const b = pos[n.key];
+    if (!b) return;
+    (n.from || []).forEach((fk) => {
+      const a = pos[fk];
+      if (a) edges.push('<path class="chain-edge ext-edge ' + n.io + '" d="' + edgePath(a, b) + '"/>');
+    });
+  });
+
+  const shapes = items.map((it) => {
+    const p = pos[it.key];
+    if (it.type === "ext") {
+      const n = it.data;
+      return '<g class="chain-ext">' +
+        '<rect x="' + p.x + '" y="' + p.y + '" width="' + p.w + '" height="' + p.h +
+          '" rx="18" class="ext-rect ' + n.io + '"/>' +
+        '<text x="' + (p.x + 12) + '" y="' + (p.y + p.h / 2 - 2) + '" class="ext-tag ' + n.io + '">' +
+          (n.io === "db" ? "DB" : "HTTP") + "</text>" +
+        '<text x="' + (p.x + 48) + '" y="' + (p.y + p.h / 2 - 2) + '" class="ext-label">' +
+          esc(n.label.length > 18 ? n.label.slice(0, 17) + "…" : n.label) + "</text>" +
+        '<title>' + (n.io === "db" ? "数据库调用" : "HTTP 调用") + "：" + esc(n.label) + "</title></g>";
+    }
+    const n = it.data;
+    const fs = findingByKey[n.key] || [];
+    const sev = topSev(fs);
+    const selected = state.chainFilter === n.key;
+    const openCount = fs.filter((f) => f.status === "open" || f.status === "confirmed").length;
+    const titleLines = [n.qualname, n.file + ":" + n.line,
+      n.n_args + " 个参数 · " + n.n_lines + " 行 · 最大嵌套 " + n.max_depth,
+      "影响面：被 " + n.blast + " 个接口触达"]
+      .concat(fs.slice(0, 4).map((f) => "· " + f.message));
+    return '<g class="chain-node' + (selected ? " selected" : "") +
+        (fs.length ? " has-findings" : "") + '" data-key="' + esc(n.key) + '">' +
+      '<rect x="' + p.x + '" y="' + p.y + '" width="' + p.w + '" height="' + p.h +
+        '" rx="9" class="node-rect' + (sev ? " sev-" + sev : "") + '"/>' +
+      (sev ? '<rect x="' + p.x + '" y="' + p.y + '" width="' + p.w + '" height="4" rx="2" class="node-top ' + sev + '"/>' : "") +
+      '<text x="' + (p.x + 12) + '" y="' + (p.y + 22) + '" class="cn-name">' +
+        esc(n.qualname.length > 26 ? n.qualname.slice(0, 25) + "…" : n.qualname) + "</text>" +
+      '<text x="' + (p.x + 12) + '" y="' + (p.y + 40) + '" class="cn-loc">' +
+        esc(n.file) + ":" + n.line + "</text>" +
+      (n.blast >= 2 ? '<text x="' + (p.x + 12) + '" y="' + (p.y + 54) + '" class="cn-blast">↻ ' +
+        n.blast + " 接口共用</text>" : "") +
+      (openCount ? '<g class="cn-badge"><circle cx="' + (p.x + p.w - 16) + '" cy="' + (p.y + 16) +
+        '" r="9" class="' + sev + '"/><text x="' + (p.x + p.w - 16) + '" y="' + (p.y + 20) +
+        '" class="cn-badge-num">' + openCount + "</text></g>" : "") +
+      "<title>" + esc(titleLines.join("\n")) + "</title></g>";
+  }).join("");
+
+  return '<svg width="' + Math.max(width, 400) + '" height="' + height +
+    '" viewBox="0 0 ' + width + " " + height + '">' + edges.join("") + shapes + "</svg>";
+}
+
+async function toggleChainDetail(id) {
+  const tr = document.querySelector('#ep-detail [data-detail="' + id + '"]');
+  const box = $("ep-detail-box-" + id);
+  if (!tr || !box) return;
+  if (tr.style.display === "none") {
+    tr.style.display = "";
+    state.chainExpanded.add(id);
+    const d = state.endpointDetail;
+    const f = d.findings.find((x) => x.id === id)
+      || Object.values(d.file_findings).flat().find((x) => x.id === id);
+    if (!box.dataset.loaded) {
+      box.innerHTML = '<div class="muted">加载代码…</div>';
+      const code = await api(P("/code?file=" + encodeURIComponent(f.file) + "&around=" + f.line));
+      box.dataset.loaded = "1";
+      box.innerHTML = renderDetail(f, code);
+      box.querySelectorAll(".detail-actions button").forEach((b) =>
+        b.addEventListener("click", () =>
+          reviewChain(Number(b.dataset.id), b.dataset.status)));
+    }
+  } else {
+    tr.style.display = "none";
+    state.chainExpanded.delete(id);
+  }
+}
+
+async function reviewChain(id, status) {
+  await api(P("/findings/" + id + "/review"), {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+  toast("已更新，下次扫描后接口分数与趋势同步刷新");
+  if (state.endpointDetail) await openEndpoint(state.endpointDetail.endpoint.id, { keepScroll: true });
 }
 
 // ===========================================================================

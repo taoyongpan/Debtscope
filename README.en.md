@@ -15,6 +15,7 @@ Connect a model, pick a project, define metrics in plain language — then watch
 > Debtscope answers three questions teams cannot today: **how much** debt do we have, **where** exactly is it, and are we getting **better or worse**?
 
 - **Zero third-party dependencies** — pure Python standard library; just `git clone` and run, no database / Docker / server
+- **Interface Radar (v0.4)** — statically discovers Flask / FastAPI / generic `@route` entrypoints, builds cross-file call chains, and attaches debt to **every node on every endpoint's chain**; per-endpoint health scores, blast-radius ordering, in-loop DB/HTTP (N+1) detection — **pure static analysis: it never runs your code, never instruments it, and is not runtime monitoring / APM**
 - **Deterministic core + agent shell** — AST/call-graph rules do the whole-repo sweep; the LLM only refines 1–5% of candidates: cheap, fast, verifiable
 - **Metrics as data** — disable built-in rules, tune thresholds/severity, add 8 kinds of custom metrics in the UI, or **describe one in a sentence and let AI compile it**, with a dry-run preview before saving
 - **Multi-project** — switch between monitored local repositories in one dashboard; data stays per-project and on your machine
@@ -27,6 +28,7 @@ Connect a model, pick a project, define metrics in plain language — then watch
 | | SonarQube | AI coding assistants | Manual review | **Debtscope** |
 |---|---|---|---|---|
 | Whole-repo inventory | ✅ | ❌ (edit-time only) | ❌ | ✅ |
+| Endpoint-level call chains with debt attached | partial | ❌ | partial | ✅ static chain graph + per-endpoint findings + blast radius |
 | Natural-language custom metrics | ❌ write plugins | partial | ❌ | ✅ AI → rule, with dry-run preview |
 | Custom rules editable in the UI | ❌ | ❌ | ❌ | ✅ create / edit / disable / delete |
 | Semantic dead-vs-entry-point judgment | ❌ syntax rules | ✅ but no repo-wide view | ✅ not repeatable | ✅ hybrid |
@@ -50,28 +52,40 @@ Connect a model, pick a project, define metrics in plain language — then watch
 *② Give a local repository path; Debtscope builds the index and runs the first scan (initializes monitoring). Monitored projects appear as cards and stay in the top-bar switcher.*
 
 <p align="center">
+  <img src="docs/images/endpoints-list.png" alt="Endpoint monitoring list" width="920">
+</p>
+
+*③ **Interface Radar** is the default home tab: every statically discovered HTTP endpoint is ranked by health score, with method / path / framework / handler, high/medium findings on the chain, chain depth and **blast radius** (how many endpoints share each underlying function — the explosion radius if you change it).*
+
+<p align="center">
+  <img src="docs/images/endpoint-chain.png" alt="Endpoint call chain with findings" width="920">
+</p>
+
+*④ Open an endpoint: the cross-file call chain renders as a layered DAG — rectangles are in-repo functions (top bar color = worst finding, corner badge = finding count, “↻ N endpoints” marks hotspots), dashed pills are database / HTTP external calls. The panel below lists every optimization point on this chain; click a node to filter to that function, expand a finding for code evidence and triage it in place. Deep-linkable via `?ep=<endpoint-id>`.*
+
+<p align="center">
   <img src="docs/images/dashboard-v2.png" alt="Debtscope dashboard" width="920">
 </p>
 
-*③ Health score ring, this-scan delta (new vs eliminated), severity donut, rule-type distribution, score trend and a filterable findings table — with project switcher, metric manager and model badge in the top bar.*
+*⑤ The **Project overview** tab: health score ring, this-scan delta (new vs eliminated), severity donut, rule-type distribution, score trend and a filterable findings table — with project switcher, metric manager and model badge in the top bar.*
 
 <p align="center">
   <img src="docs/images/rules-manager.png" alt="Metric manager" width="920">
 </p>
 
-*④ Metric manager: toggle built-in metrics, tune thresholds and severity, or add team-specific ones. Built-in metrics reset to defaults; custom metrics can be deleted.*
+*⑥ Metric manager: toggle built-in metrics, tune thresholds and severity, or add team-specific ones. Built-in metrics reset to defaults; custom metrics can be deleted.*
 
 <p align="center">
   <img src="docs/images/rule-editor.png" alt="AI-assisted metric editor" width="760">
 </p>
 
-*⑤ Describe a metric in one sentence — “ban print debugging”, “functions must not exceed 80 lines”, “class names must be PascalCase” — AI compiles it into a parameterized rule. **Dry-run it against the current index before saving** (hit count + sample locations); the scan reruns automatically afterwards.*
+*⑦ Describe a metric in one sentence — “ban print debugging”, “functions must not exceed 80 lines”, “class names must be PascalCase” — AI compiles it into a parameterized rule. **Dry-run it against the current index before saving** (hit count + sample locations); the scan reruns automatically afterwards.*
 
 <p align="center">
   <img src="docs/images/finding-detail.png" alt="Finding detail with code evidence" width="920">
 </p>
 
-*Click any finding to expand code context with the offending line highlighted, review verdict, fix suggestion and one-click triage (confirm / false-positive / wontfix). Deep-linkable via `#finding-<id>`.*
+*⑧ Click any finding to expand code context with the offending line highlighted, review verdict, fix suggestion and one-click triage (confirm / false-positive / wontfix). Deep-linkable via `#finding-<id>`.*
 
 ## How it works
 
@@ -84,7 +98,7 @@ flowchart TB
     L4["L4 Aggregate · counts · severity · snapshot diff"]
     L3["L3 Review · LLM semantic verdict on candidates only · NL→rule generation"]
     L2["L2 Rules · data-driven AST/call-graph checks produce candidates"]
-    L1["L1 Index · symbols · args · nesting · call graph · references · git history"]
+    L1["L1 Index · symbols · args · nesting · call graph · HTTP entrypoints · references · git history"]
     REPO[("Git repository")]
     REPO --> L1 --> L2 --> L3 --> L4 --> L5 --> UI
     DB[("SQLite · one ledger per project · rules & snapshots")]
@@ -186,7 +200,7 @@ In the web app, click the model badge in the top bar to edit configuration at an
 
 ## Metrics & rules
 
-### 7 built-in metrics (Python)
+### 8 built-in metrics (Python)
 
 | Rule | Severity | What it catches |
 |---|---|---|
@@ -194,6 +208,7 @@ In the web app, click the model badge in the top bar to edit configuration at an
 | `swallowed_exception` | medium | bare `except`, or `except: pass` that silently swallows errors |
 | `mutable_default_argument` | medium | `def f(x=[])` and friends — shared mutable defaults |
 | `open_without_context` | medium | `open()` outside a `with` block, leaking handles on error paths |
+| `db_call_in_loop` | medium | database / HTTP calls directly inside a loop body (classic N+1); only the innermost loop is reported, calls inside nested function definitions are not |
 | `long_function` | low | functions over 50 lines |
 | `todo_accumulation` | low | files with 5+ TODO/FIXME comments |
 | `duplicate_function` | low | structurally identical function bodies (copy-paste), robust to renamed variables |
@@ -214,6 +229,34 @@ In the web app, click the model badge in the top bar to edit configuration at an
 Every custom metric is a row in the same rule engine as built-in ones — no special execution path. The **AI assist** box compiles a sentence into `{kind, severity, params}`; you then **dry-run preview** it against the current index before saving. Invalid regexes and empty call lists are rejected at preview time.
 
 Inspect from the CLI: `debtscope rules` lists built-in metrics and creatable kinds.
+
+## Interface Radar: code-dimension static monitoring
+
+Interface Radar answers **code questions**, not service questions: which functions does each HTTP entrypoint reach in the code, what debt hangs on those functions, and how many endpoints are affected if you change a shared helper.
+
+**How it works (fully static)**
+
+1. **Entrypoint discovery** — recognizes web-framework route decorators, joins registration prefix + blueprint/router prefix + decorator path, and parses HTTP methods.
+2. **Call graph** — two AST passes resolve `import x` / `from x import y` / relative imports / same-file calls / `self` & `cls` methods / static and inline-constructor calls (`Client().get()`); third-party calls never get guessed edges, while database (`execute` / `fetchall` / `query` / `commit` / `flush` …) and HTTP (`requests` / `httpx` / `aiohttp` / `urlopen` …) sinks are kept as external nodes.
+3. **Debt attachment** — function-level findings attach to chain nodes; file-level findings attach to files touched by the chain. Every endpoint gets its own health score and snapshot trend.
+4. **Blast radius** — how many endpoint chains reach each function; the more sharing, the riskier the change.
+
+**Support matrix (v0.4)**
+
+| Framework | Supported | Not yet supported |
+|---|---|---|
+| Flask | `@app.route` / verb decorators, `Blueprint(url_prefix=...)` + `register_blueprint(url_prefix=...)` (double prefix), GET default | Django `urls.py`, `MethodView` / class-based views |
+| FastAPI | verb decorators, `APIRouter(prefix=...)` + `include_router(prefix=...)` | class-based route handlers |
+| Generic | any decorator named `route` (reported as `ANY`) | dynamically built route tables, runtime registration |
+
+**Explicitly out of scope**: Debtscope never starts your service, never instruments it, and never collects QPS / latency / error rates — it is not an APM. A possible v1.0 feature is **offline import** of OpenTelemetry trace files to overlay real-call heat on the static chain — still without shipping or running any probe.
+
+Quick CLI view (no ledger writes, no model calls):
+
+```bash
+debtscope endpoints /path/to/repo
+# METHOD  PATH  FRAMEWORK  DEPTH  NODES  HANDLER
+```
 
 ## Multi-project storage
 
@@ -238,6 +281,7 @@ debtscope scan <path>     # index, analyze, reconcile findings, record a snapsho
 debtscope config          # interactive model/endpoint wizard (also --show, --provider …)
 debtscope doctor          # check config and model connectivity
 debtscope rules           # list built-in metrics and creatable kinds
+debtscope endpoints <path> # list HTTP entrypoints and chain size (static, no writes/model)
 ```
 
 ## Roadmap
@@ -246,9 +290,11 @@ debtscope rules           # list built-in metrics and creatable kinds
 - **v0.2** ✅ model config wizard (CLI + web), provider presets, connectivity test, `debtscope.harness` package
 - **v0.3** ✅ config-first 3-step onboarding, multi-project registry, data-driven rule engine, UI metric manager (create/edit/disable/delete/reset), 8 creatable metric kinds, AI rule generation with dry-run preview, 16 provider presets
 - **v0.3.1** ✅ local-server hardening (static-dir traversal blocked, Host allow-list), unified AI review JSON protocol with tolerant parsing, visible degradation reasons, port self-healing, 40 offline tests, CI
-- **v0.4** — micro-kernel + tool registry + multi-step ReAct loop (evidence-fetching review, conversational metric tuning), run/trace JSONL & traces page
-- **v0.5** — language-backend plugin seam + tree-sitter (Java / Go / JS/TS), token-cost dashboard
-- **v0.6** — CI headless mode (`--ci`, SARIF output, quality-gate exit codes); repo groups & aggregate rollups
+- **v0.4** ✅ **Interface Radar**: Flask / FastAPI / generic `@route` discovery (blueprint/router double prefixes), cross-file static call chains (import resolution, DB/HTTP sinks), findings attached to chain nodes, per-endpoint health scores & snapshot trends, blast-radius ordering, in-loop DB/HTTP (N+1) built-in rule, endpoint list & SVG chain detail pages, `debtscope endpoints` CLI
+- **v0.5** — monitoring mode: `--watch` & git hooks, endpoint-level event stream, baselines & quality gates (block only new debt), Markdown weekly reports, git-blame owners
+- **v0.6** — AI chain checkup: feed structured chain summaries to the model to catch cross-function N+1, transaction boundaries, missing auth, pagination / caching gaps
+- **v0.7** — language-backend plugin seam + tree-sitter (Go / Java / JS/TS), CI headless mode (`--ci`, SARIF output, quality-gate exit codes)
+- **v1.0** — optional offline OpenTelemetry trace import for heat overlay (no instrumentation, no APM); micro-kernel + tool registry + multi-step ReAct, token-cost dashboard
 - **later** — runtime-coverage cross-check for dead code, autofix with diff review, optional plugin bundle
 
 See [docs/design-v2.md](docs/design-v2.md) for the product/technical design and
@@ -263,7 +309,7 @@ gateway and no code ever leaves your network. Keys are stored only in
 
 ## Contributing
 
-Issues and PRs are welcome! Development only needs Python 3.10+, and all 40
+Issues and PRs are welcome! Development only needs Python 3.10+, and all 56
 tests run fully offline without any API key:
 
 ```bash

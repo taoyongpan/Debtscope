@@ -16,6 +16,7 @@
 > Debtscope 回答三个团队长期答不上来的问题：技术债**有多少**、**具体在哪里**、我们正在变**好还是变差**？
 
 - **零第三方依赖**：纯 Python 标准库实现，`git clone` 即可运行，无需数据库 / Docker / 服务端
+- **接口雷达（v0.4）**：静态识别 Flask / FastAPI / 通用 `@route` 入口，构建跨文件调用链，把技术债挂到**每一个接口的链路节点**上；接口健康分、影响面（blast radius）排序、循环内 DB/HTTP（N+1）检测——**纯静态分析，不运行代码、不插桩、不做运行时监控 / APM**
 - **确定性内核 + Agent 外壳**：AST 与调用图规则做全量粗筛，LLM 只精判 1%–5% 的候选，便宜、快、可复核
 - **指标即数据**：内置规则可停用 / 调阈值 / 调严重度；8 类指标可在界面上自助新增，或**一句话让 AI 生成**，保存前先在当前仓库上试跑预览
 - **多项目托管**：一个看板切换监控多个本地仓库，数据各自独立，全部留在本机
@@ -28,6 +29,7 @@
 | 能力 | SonarQube | AI 编程助手 | 人工 Code Review | **Debtscope** |
 |---|---|---|---|---|
 | 全仓技术债盘点 | ✅ | ❌ 仅编辑时 | ❌ | ✅ |
+| 接口级调用链与链上债务定位 | 部分 | ❌ | 部分 | ✅ 静态链路图 + 每接口优化点 + 影响面 |
 | 自然语言定义自定义指标 | ❌ 要写插件 | 部分支持 | ❌ | ✅ 一句话生成规则，带试跑预览 |
 | 在界面里增删改自定义规则 | ❌ | ❌ | ❌ | ✅ 新增 / 编辑 / 停用 / 删除 / 重置 |
 | 语义判定「死代码 vs 框架入口」 | ❌ 仅语法规则 | ✅ 但没有全仓视角 | ✅ 不可复现 | ✅ 确定性粗筛 + AI 精判 |
@@ -51,28 +53,40 @@
 *② 填写本地仓库的绝对路径，Debtscope 建立索引并完成首次扫描（即初始化监控）。已监控项目以卡片展示，并常驻顶栏切换器。*
 
 <p align="center">
+  <img src="docs/images/endpoints-list.png" alt="接口监控列表" width="920">
+</p>
+
+*③ 「接口监控」是默认首页：静态发现的每一个 HTTP 接口按健康分排序，展示方法 / 路径 / 框架 / 处理函数、链上高 / 中危问题数、链路深度与**影响面**（一个底层函数被多少接口共用，改它的爆炸半径有多大）。*
+
+<p align="center">
+  <img src="docs/images/endpoint-chain.png" alt="接口调用链路与优化点" width="920">
+</p>
+
+*④ 点进任一接口：跨文件调用链以分层 DAG 呈现——矩形是项目内函数（顶条颜色 = 该节点最严重的问题，角标是问题数，「↻ N 接口共用」标注热点），虚线胶囊是数据库 / HTTP 外部调用；下方列出这条链路上的全部优化点，点击节点即可只看该函数的问题，展开即见代码证据并可一键分诊。支持 `?ep=<接口ID>` 深链直达。*
+
+<p align="center">
   <img src="docs/images/dashboard-v2.png" alt="Debtscope 看板" width="920">
 </p>
 
-*③ 健康分环形图、本次新增 / 消除、严重度环形分布、问题类型条形分布、健康分趋势、可筛选的问题明细表；顶栏是项目切换、指标管理、模型徽章与重新扫描。*
+*⑤ 「项目总览」页：健康分环形图、本次新增 / 消除、严重度环形分布、问题类型条形分布、健康分趋势、可筛选的问题明细表；顶栏是项目切换、指标管理、模型徽章与重新扫描。*
 
 <p align="center">
   <img src="docs/images/rules-manager.png" alt="指标管理" width="920">
 </p>
 
-*④ 指标管理：启用 / 停用内置指标、调整严重度、编辑阈值，或新增团队专属指标。内置指标可一键重置回默认，自定义指标可删除。*
+*⑥ 指标管理：启用 / 停用内置指标、调整严重度、编辑阈值，或新增团队专属指标。内置指标可一键重置回默认，自定义指标可删除。*
 
 <p align="center">
   <img src="docs/images/rule-editor.png" alt="AI 辅助指标编辑器" width="760">
 </p>
 
-*⑤ 用一句话描述指标——「禁止 print 调试」「函数不超过 80 行」「类名必须大驼峰」——AI 把它编译成带参数的确定性规则。**保存前在当前索引上试跑预览**（命中数量与样例位置），保存后自动重新扫描。*
+*⑦ 用一句话描述指标——「禁止 print 调试」「函数不超过 80 行」「类名必须大驼峰」——AI 把它编译成带参数的确定性规则。**保存前在当前索引上试跑预览**（命中数量与样例位置），保存后自动重新扫描。*
 
 <p align="center">
   <img src="docs/images/finding-detail.png" alt="问题详情与代码证据" width="920">
 </p>
 
-*点击任意问题展开代码上下文（问题行高亮）、AI 研判结论、修复建议与一键分诊（确认问题 / 误报 / 暂不处理），支持 `#finding-<id>` 深链定位。*
+*⑧ 点击任意问题展开代码上下文（问题行高亮）、AI 研判结论、修复建议与一键分诊（确认问题 / 误报 / 暂不处理），支持 `#finding-<id>` 深链定位。*
 
 ## 工作原理
 
@@ -85,7 +99,7 @@ flowchart TB
     L4["L4 聚合 · 计数 · 严重度 · 快照对账"]
     L3["L3 精判 · 仅对候选做 LLM 语义裁决 · 自然语言生成规则"]
     L2["L2 规则 · 数据驱动的 AST/调用图检查，产出候选"]
-    L1["L1 索引 · 符号 · 参数 · 嵌套 · 调用图 · 引用 · Git 版本"]
+    L1["L1 索引 · 符号 · 参数 · 嵌套 · 调用图 · HTTP 入口 · 引用 · Git 版本"]
     REPO[("Git 仓库")]
     REPO --> L1 --> L2 --> L3 --> L4 --> L5 --> UI
     DB[("SQLite · 每项目一个台账 · 规则与快照")]
@@ -187,7 +201,7 @@ export DEBTSCOPE_MODEL="doubao-seed-evolving"
 
 ## 指标与规则
 
-### 7 条内置指标（Python）
+### 8 条内置指标（Python）
 
 | 规则 | 严重度 | 检测内容 |
 |---|---|---|
@@ -195,6 +209,7 @@ export DEBTSCOPE_MODEL="doubao-seed-evolving"
 | `swallowed_exception` | 中 | 裸 `except`，或捕获异常后直接 `pass` 静默吞没 |
 | `mutable_default_argument` | 中 | `def f(x=[])` 一类在多次调用间共享的可变默认参数 |
 | `open_without_context` | 中 | `open()` 未放在 `with` 中，异常路径泄漏文件句柄 |
+| `db_call_in_loop` | 中 | 循环体内直接执行数据库 / HTTP 调用（典型 N+1）；只报最内层循环，嵌套函数定义内的调用不误报 |
 | `long_function` | 低 | 函数超过 50 行 |
 | `todo_accumulation` | 低 | 单文件堆积 5 处以上 TODO/FIXME |
 | `duplicate_function` | 低 | 函数体结构完全一致的复制粘贴（对变量改名免疫） |
@@ -215,6 +230,34 @@ export DEBTSCOPE_MODEL="doubao-seed-evolving"
 每条自定义指标与内置指标走**同一个规则引擎、同一条执行路径**，没有特殊待遇。AI 辅助框把一句话编译成 `{kind, severity, params}`，保存前可在当前索引上**试跑预览**（命中数 + 样例）；非法正则、空调用名等问题会在试跑阶段直接报错。
 
 CLI 查看：`debtscope rules` 列出内置指标与可创建类型。
+
+## 接口雷达：代码维度的静态监控
+
+接口雷达回答的是**代码问题**，不是服务问题：每个 HTTP 入口在代码里会走到哪些函数、这些函数上挂着什么债、改一个底层函数会波及几个接口。
+
+**工作方式（全程静态）**
+
+1. **入口发现**：识别 Web 框架的路由装饰器，拼接「注册前缀 + 蓝图 / 路由前缀 + 装饰器路径」，解析 HTTP 方法。
+2. **调用图构建**：两遍 AST 扫描解析 `import x` / `from x import y` / 相对导入 / 同文件调用 / `self`、`cls` 方法 / 类静态与构造调用（`Client().get()`），第三方库不猜边；数据库（`execute` / `fetchall` / `query` / `commit` / `flush` …）与 HTTP（`requests` / `httpx` / `aiohttp` / `urlopen` …）汇点保留为外部节点。
+3. **债务挂载**：函数级问题挂到链路节点，文件级问题挂到链上触达的文件；每个接口得到独立健康分与快照趋势。
+4. **影响面（blast radius）**：统计每个函数被多少个接口的链路触达——共用得越多，改动风险越高。
+
+**支持矩阵（v0.4）**
+
+| 框架 | 支持的写法 | 暂不支持 |
+|---|---|---|
+| Flask | `@app.route` / `@app.get` 等动词、`Blueprint(url_prefix=...)` + `register_blueprint(url_prefix=...)` 双前缀、默认 GET | Django `urls.py` 配置、`MethodView` / 类视图 |
+| FastAPI | `@api.get` 等动词、`APIRouter(prefix=...)` + `include_router(prefix=...)` | 类视图（`APIRouter` + `@route` class） |
+| 通用 | 任意名为 `route` 的装饰器（识别为 `ANY`） | 动态拼接路由表、运行时注册 |
+
+**明确不做的事**：不启动你的服务、不插桩、不采集 QPS / 延迟 / 错误率、不做 APM。Debtscope 只读代码。未来 v1.0 可能支持**离线导入** OpenTelemetry trace 文件，把真实调用热度叠加到静态链路上——依然不随产品运行任何探针。
+
+CLI 快速查看入口（不写库、不调模型）：
+
+```bash
+debtscope endpoints /path/to/repo
+# METHOD  PATH  FRAMEWORK  DEPTH  NODES  HANDLER
+```
 
 ## 多项目与数据存储
 
@@ -239,6 +282,7 @@ debtscope scan <path>       # 索引、分析、对账并记录快照
 debtscope config            # 交互式模型 / 端点向导（另有 --show、--provider 等）
 debtscope doctor            # 检查配置与模型连通性
 debtscope rules             # 列出内置指标与可创建类型
+debtscope endpoints <path>  # 列出 HTTP 入口与链路规模（纯静态，不写库不调模型）
 ```
 
 ## 路线图
@@ -247,9 +291,11 @@ debtscope rules             # 列出内置指标与可创建类型
 - **v0.2** ✅ 模型配置向导（CLI + Web）、厂商预设、连通性测试、`debtscope.harness` 包
 - **v0.3** ✅ 配置前置三步引导、多项目注册表、数据驱动规则引擎、界面指标管理（增 / 改 / 停 / 删 / 重置）、8 类可创建指标、AI 生成规则 + 试跑预览、16 套模型预设
 - **v0.3.1** ✅ 本地服务安全加固（静态目录防穿越、Host 白名单）、AI 精判 JSON 协议统一与容错解析、降级原因可见、端口占用自愈、40 个离线测试、CI
-- **v0.4** — 微内核 + 工具注册表 + 多步 ReAct 循环（可取证的精判、对话式指标调优）、运行 / trace JSONL 与链路页
-- **v0.5** — 语言后端插件缝 + tree-sitter（Java / Go / JS/TS）、Token 成本看板
-- **v0.6** — CI 无头模式（`--ci`、SARIF 输出、质量门退出码）、项目分组与聚合滚动视图
+- **v0.4** ✅ **接口雷达**：Flask / FastAPI / 通用 `@route` 入口发现（蓝图 / 路由双前缀）、跨文件静态调用链（导入解析、DB / HTTP 汇点）、技术债挂链路节点、接口健康分与快照趋势、blast radius 影响面排序、循环内 DB/HTTP（N+1）内置规则、接口列表与 SVG 链路详情页、`debtscope endpoints` CLI
+- **v0.5** — 监控模式：`--watch` 与 git hook、接口级事件流、基线与质量门（只拦新增债务）、Markdown 周报、git blame 责任人
+- **v0.6** — 链路 AI 体检：把结构化链路摘要喂给模型，识别跨函数 N+1、事务边界、缺失鉴权、分页 / 缓存缺失等人和规则都难抓的问题
+- **v0.7** — 语言后端插件缝 + tree-sitter（Go / Java / JS/TS）、CI 无头模式（`--ci`、SARIF 输出、质量门退出码）
+- **v1.0** — 可选：离线导入 OpenTelemetry trace 文件做热度叠加（不插桩、不做 APM）；微内核 + 工具注册表 + 多步 ReAct、Token 成本看板
 - **更后面** — 死代码的运行时覆盖率交叉验证、带 diff 评审的自动修复、可选插件包
 
 产品与技术设计见 [docs/design-v2.md](docs/design-v2.md)，Harness 蓝图见 [docs/harness-architecture.md](docs/harness-architecture.md)。
@@ -260,7 +306,7 @@ debtscope rules             # 列出内置指标与可创建类型
 
 ## 贡献
 
-欢迎提交 Issue 与 PR！开发只需要 Python 3.10+，全部 40 个测试离线可跑、无需 API Key：
+欢迎提交 Issue 与 PR！开发只需要 Python 3.10+，全部 56 个测试离线可跑、无需 API Key：
 
 ```bash
 python -m unittest discover -s tests -v

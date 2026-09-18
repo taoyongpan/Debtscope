@@ -3,6 +3,38 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.0] - 2026-09-18
+
+### 新增 — 接口雷达（代码维度的静态监控）
+
+- **HTTP 入口发现**（`core/endpoints.py`）：支持 Flask（`@app.route` / `@app.get` 等动词、`Blueprint(url_prefix=...)` 与 `register_blueprint(url_prefix=...)` 双前缀拼接、无 `methods` 默认 GET）、FastAPI（动词装饰器、`APIRouter(prefix=...)` + `include_router(prefix=...)`）以及通用裸 `@route` 装饰器（识别为 ANY）；路径多斜杠自动归一。
+- **跨文件静态调用图**（`core/callgraph.py`）：两遍 AST 扫描，解析 `import x` / `import x as` / `from x import y` / 相对导入 / 同文件顶层函数 / `self`、`cls` 同类方法 / 类静态方法与构造后立即调用（`Client().get()`）；不可解析的第三方调用不猜边；数据库（`execute` / `executemany` / `fetch*` / `query` / `commit` / `rollback` / `flush` / `bulk_*`）与 HTTP（`requests` / `httpx` / `aiohttp` / `urlopen`）汇点识别为外部节点；BFS 构建链路（深度 / 节点数双上限，天然防环）。
+- **债务挂链路**：函数级问题挂到调用链节点，文件级问题挂到链上触达的文件；每个接口独立健康分、高 / 中危计数与快照趋势（分数涨跌、问题涨跌）。
+- **影响面（blast radius）**：统计每个函数被多少个接口的链路触达，列表页对多接口共用的热点函数高亮排序。
+- **接口监控界面**：默认首页 Tab「接口监控」——接口列表（方法徽章、框架标签、健康分、问题数、链深、影响面、涨跌箭头）与接口详情（KPI、分数迷你趋势、纯手写 SVG 分层调用链 DAG、DB / HTTP 外部调用胶囊、节点点击筛选优化点、代码证据展开、确认 / 误报 / 暂不处理分诊、文件级问题分组）；支持 `?ep=<接口ID>` 深链直达。原看板保留为「项目总览」Tab。
+- **新内置规则 `db_call_in_loop`（第 8 条）**：循环体内直接执行数据库 / HTTP 调用（典型 N+1），只报最内层循环，嵌套函数 / lambda 定义内的调用不误报，同循环多处调用分别给出带行号的证据。
+- **CLI**：新增 `debtscope endpoints <path>`，纯静态列出 HTTP 入口、框架、链路深度 / 节点数与处理函数（不写库、不调模型）；`scan` 摘要新增接口数。
+- **Web API**：`GET /api/projects/<pid>/endpoints` 与 `/api/projects/<pid>/endpoints/<eid>`（详情含节点、边、外部汇点、全量优化点、文件级分组与趋势）。
+- demo 工程扩为 6 个文件：新增 Flask 蓝图 + FastAPI 路由的 Web 层与 service / DAO 分层，植入循环内 DB + HTTP 双 N+1、裸 except、共用 DAO 等样例，共 11 个接口。
+
+### 修复
+
+- `swallowed_exception` 检测器现在正确写入所属函数符号；此前吞错问题缺少符号、被当作文件级问题挂到所有触达该文件的接口上。
+- 调用图不再把路由装饰器（`@app.route(...)`）本身误连为函数调用边。
+- 修复相对导入层级切片的 `-0` 边界错误。
+
+### 变更
+
+- 问题类型（KINDS）12 → 13，内置指标 7 → 8；demo 基线：6 文件 / 381 LOC / 37 符号 / 11 接口 / 12 问题 / 79 分（B）。
+- 存储层新增 `endpoints` / `endpoint_findings` / `endpoint_snapshots` 三张表，旧库打开时自动升级；接口每次扫描全量对账（消失的接口物理删除、快照 append-only 保留历史）。
+- 测试套件 40 → 56：新增调用图 7 例、入口发现 5 例、N+1 规则正反例 3 例、接口 API 端到端 1 例。
+- 文档：双语 README 新增「接口雷达」章节（含支持矩阵与「不做运行时监控 / APM」的明确边界声明）、两张新截图；路线图更新为 v0.5 监控模式 → v0.6 链路 AI 体检 → v0.7 多语言与 CI → v1.0 可选 OTel trace 离线导入。
+
+### 已知限制（路线图内）
+
+- Django `urls.py`、Flask `MethodView` 与 FastAPI 类视图暂不识别；动态拼接的路由表无法静态发现。
+- 实例属性上的方法调用（`self.client.fetch()`，其中 `client` 为组合对象）受限于不做跨过程值流分析，暂不连边；`self.方法()`、类静态调用与构造调用不受影响。
+
 ## [0.3.1] - 2026-09-17
 
 ### 修复（安全与可靠性）

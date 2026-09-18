@@ -161,6 +161,45 @@ class WebApiTest(unittest.TestCase):
             "GET", f"/api/projects/{self.pid}/code?file=api.py&around=notanint")
         self.assertEqual(status, 400)
 
+    def test_09_endpoint_radar_apis(self):
+        status, data = self.req("GET", f"/api/projects/{self.pid}/endpoints")
+        self.assertEqual(status, 200)
+        eps = data["endpoints"]
+        self.assertEqual(len(eps), 11)
+        # ordered by health: the create endpoint carries debt and sorts first
+        self.assertLessEqual(eps[0]["score"], eps[-1]["score"])
+        by_route = {(e["method"], e["path"]): e for e in eps}
+        create = by_route[("POST", "/v1/api/orders/create")]
+        listing = by_route[("GET", "/v1/api/orders/list")]
+        self.assertGreater(create["open_count"], 0)
+
+        # detail: chain reaches the service layer and attaches findings
+        status, d = self.req(
+            "GET", f"/api/projects/{self.pid}/endpoints/{create['id']}")
+        self.assertEqual(status, 200, d)
+        keys = {n["key"] for n in d["chain"]["nodes"]}
+        self.assertIn("order_service.py::create_order", keys)
+        self.assertIn("user_service.py::save_user", keys)
+        self.assertTrue(d["chain"]["edges"])
+        self.assertTrue(
+            any(e["io"] == "db" for e in d["chain"]["ext_nodes"]))
+        rule_ids = {f["rule_id"] for f in d["findings"]}
+        self.assertIn("swallowed_exception", rule_ids)
+        # blast radius: shared DAO/connect helpers touch multiple endpoints
+        self.assertGreaterEqual(d["latest"]["blast_radius"], 2)
+
+        # N+1 rule hangs on the list endpoint
+        status, d2 = self.req(
+            "GET", f"/api/projects/{self.pid}/endpoints/{listing['id']}")
+        self.assertEqual(status, 200)
+        self.assertIn("db_call_in_loop",
+                      {f["rule_id"] for f in d2["findings"]})
+
+        # unknown endpoint -> 404
+        status, _ = self.req(
+            "GET", f"/api/projects/{self.pid}/endpoints/e_does_not_exist")
+        self.assertEqual(status, 404)
+
 
 if __name__ == "__main__":
     unittest.main()
