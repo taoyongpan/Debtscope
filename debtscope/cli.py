@@ -108,6 +108,65 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_bases(args: argparse.Namespace) -> list[str]:
+    if getattr(args, "base", None):
+        return [os.path.abspath(args.base)]
+    home = os.path.join(os.path.expanduser("~"), ".debtscope")
+    local = os.path.join(os.getcwd(), ".debtscope")
+    bases = []
+    for b in (home, local):
+        rb = os.path.realpath(b)
+        if rb not in bases:
+            bases.append(rb)
+    return bases
+
+
+def _cmd_runs(args: argparse.Namespace) -> int:
+    import json as _json
+    from .harness.trace import RunRecorder
+    bases = _run_bases(args)
+    if args.run_id:
+        events = None
+        for base in bases:
+            try:
+                events = RunRecorder.read_run(args.run_id, base)
+                break
+            except FileNotFoundError:
+                continue
+        if events is None:
+            print(f"error: run not found: {args.run_id}", file=sys.stderr)
+            return 2
+        if args.json:
+            print(_json.dumps(events, ensure_ascii=False, indent=2))
+            return 0
+        for e in events:
+            extra = " ".join(
+                f"{k}={v}" for k, v in e.items()
+                if k not in ("ts", "seq", "type") and v not in ("", None, [], {}))
+            print(f"{e.get('seq', ''):>3}  {e.get('ts', '')}  {e.get('type', ''):<18} {extra[:160]}")
+        return 0
+    runs = []
+    seen = set()
+    for base in bases:
+        for r in RunRecorder.list_runs(base, limit=args.limit):
+            if r["id"] not in seen:
+                seen.add(r["id"])
+                runs.append(r)
+    runs.sort(key=lambda r: r["id"], reverse=True)
+    runs = runs[: args.limit]
+    if not runs:
+        print("暂无运行记录，执行一次 debtscope scan（或在 Web 端扫描）后会在此生成。")
+        return 0
+    print(f"{'RUN ID':<24} {'STARTED':<19} {'MODE':<8} {'SCORE':>5} {'NEW':>4} "
+          f"{'RES':>4} {'EPs':>4} {'MS':>7}  REPO")
+    for r in runs:
+        print(f"{r['id']:<24} {r['started']:<19} {r.get('mode', ''):<8} "
+              f"{str(r.get('score') or '-'):>5} {str(r.get('new') or '-'):>4} "
+              f"{str(r.get('resolved') or '-'):>4} {str(r.get('endpoints') or '-'):>4} "
+              f"{str(r.get('ms') or '-'):>7}  {os.path.basename(r.get('repo', ''))}")
+    return 0
+
+
 def _cmd_rules(_args: argparse.Namespace) -> int:
     print(f"{'KIND':<26} {'SEV':<7} DESCRIPTION")
     seen = set()
@@ -260,6 +319,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     rl = sub.add_parser("rules", help="list built-in rules")
     rl.set_defaults(func=_cmd_rules)
+
+    rn = sub.add_parser("runs", help="list / inspect traceable agent & scan runs (JSONL)")
+    rn.add_argument("run_id", nargs="?", help="show one run's event stream")
+    rn.add_argument("--json", action="store_true", help="raw JSON for the run detail")
+    rn.add_argument("--base", help="custom .debtscope base directory")
+    rn.add_argument("--limit", type=int, default=20)
+    rn.set_defaults(func=_cmd_runs)
 
     ep = sub.add_parser("endpoints",
                         help="list HTTP entry points and call-chain stats (static, no DB)")

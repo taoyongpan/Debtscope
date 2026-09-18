@@ -84,17 +84,34 @@ def parse_verdicts(content: str, valid_keys: set[str]) -> dict[str, tuple[str, s
 
 
 class LLMClient:
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, tracer=None):
         self.cfg = cfg
+        self.tracer = tracer
+
+    def _trace(self, usage: dict, purpose: str, error: str | None = None,
+               ms: int = 0) -> None:
+        if self.tracer is None:
+            return
+        if error:
+            self.tracer.llm_error(self.cfg.model, error, purpose=purpose, ms=ms)
+        else:
+            self.tracer.llm_call(
+                self.cfg.model,
+                prompt_tokens=(usage or {}).get("prompt_tokens", 0),
+                completion_tokens=(usage or {}).get("completion_tokens", 0),
+                purpose=purpose)
 
     # -- transport ---------------------------------------------------------
 
     def _post(self, messages: list[dict], *, json_object: bool = True,
-              max_tokens: int | None = None, temperature: float = 0) -> str:
+              max_tokens: int | None = None, temperature: float = 0,
+              return_usage: bool = False):
         """Call chat/completions and return the assistant message content.
 
         Raises RuntimeError with a human-readable message after retries are
-        exhausted; callers decide how visible that error should be.
+        exhausted; callers decide how visible that error should be. When
+        ``return_usage`` is set, returns ``(content, usage_dict)`` for the
+        agent loop's token accounting.
         """
         payload: dict = {
             "model": self.cfg.model,
@@ -106,21 +123,22 @@ class LLMClient:
         if max_tokens:
             payload["max_tokens"] = max_tokens
         body = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            f"{self.cfg.api_base}/chat/completions",
-            data=body,
-            headers={
-                "Content-Type": "application/json",
-                **({"Authorization": f"Bearer {self.cfg.api_key}"} if self.cfg.api_key else {}),
-            },
-            method="POST",
-        )
+        headers = {
+            "Content-Type": "application/json",
+            **({"Authorization": f"Bearer {self.cfg.api_key}"} if self.cfg.api_key else {}),
+        }
         last_err: Exception | None = None
         for _ in range(self.cfg.max_retries + 1):
             try:
+                req = urllib.request.Request(
+                    f"{self.cfg.api_base}/chat/completions",
+                    data=body, headers=headers, method="POST")
                 with urllib.request.urlopen(req, timeout=self.cfg.timeout) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
-                return data["choices"][0]["message"]["content"] or ""
+                content = data["choices"][0]["message"].get("content") or ""
+                if return_usage:
+                    return content, data.get("usage") or {}
+                return content
             except urllib.error.HTTPError as e:
                 # Auth/quota/model errors won't heal by retrying.
                 detail = e.read().decode("utf-8", errors="replace")[:200]
@@ -129,6 +147,20 @@ class LLMClient:
                     TimeoutError, OSError) as e:
                 last_err = e
         raise RuntimeError(f"LLM call failed: {type(last_err).__name__}: {last_err}")
+
+    def chat_json(self, messages: list[dict], *, temperature: float = 0,
+                  max_tokens: int | None = None) -> tuple[str, dict]:
+        """Structured chat used by the harness agent loop.
+
+        Returns ``(content, usage)`` where usage carries prompt/completion
+        token counts when the endpoint provides them. A plain-string return
+        (e.g. from a test double) is tolerated.
+        """
+        out = self._post(messages, json_object=True, temperature=temperature,
+                         max_tokens=max_tokens, return_usage=True)
+        if isinstance(out, tuple):
+            return out
+        return out, {}
 
     # -- capabilities -------------------------------------------------------
 
@@ -146,14 +178,16 @@ class LLMClient:
         for i in range(0, len(items), 20):
             batch = items[i: i + 20]
             try:
-                content = self._post([
+                content, usage = self.chat_json([
                     {"role": "system", "content": "You output strict JSON only."},
                     {"role": "user",
                      "content": REVIEW_PROMPT % json.dumps(batch, ensure_ascii=False, indent=1)},
                 ])
+                self._trace(usage, "dead_code_batch")
                 result.update(parse_verdicts(content, {it["key"] for it in batch}))
             except Exception as e:  # never let the model block a scan
                 errors.append(str(e)[:160])
+                self._trace({}, "dead_code_batch", error=str(e)[:200])
         err = "; ".join(sorted(set(errors))) if errors else None
         return result, err
 
@@ -188,11 +222,13 @@ User request: %s
         is persisted here — the caller dry-runs the rule before saving.
         """
         try:
-            content = self._post([
+            content, usage = self.chat_json([
                 {"role": "system", "content": "You output strict JSON only."},
                 {"role": "user", "content": self.RULE_GEN_PROMPT % description[:600]},
             ], temperature=0.1)
+            self._trace(usage, "rule_generation")
         except Exception as e:
+            self._trace({}, "rule_generation", error=str(e)[:200])
             return None, f"模型调用失败：{e}"
         obj = _extract_json(content)
         if not isinstance(obj, dict) or not obj.get("kind"):

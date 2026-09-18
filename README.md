@@ -120,7 +120,9 @@ flowchart TB
 
 ### 确定性内核，Agent 外壳
 
-Agent 外壳（`debtscope.harness`）遵循 DeepSeek Harness 普及的 **Agent = Model + Harness** 范式：可插拔模型适配、项目注册表、工具契约、可追溯运行；而内置规则始终走确定性快车道（快、免费、零幻觉）。模型只做只有模型能做的事：废弃代码的语义精判、把自然语言变成参数化规则。完整蓝图（微内核、工具注册表、ReAct 循环、会话 trace、插件策略、安全模型）见 **[docs/harness-architecture.md](docs/harness-architecture.md)**。
+Agent 外壳（`debtscope.harness`）遵循 DeepSeek Harness 普及的 **Agent = Model + Harness** 范式：可插拔模型适配、项目注册表、工具契约、可追溯运行；而内置规则始终走确定性快车道（快、免费、零幻觉）。模型只做只有模型能做的事：废弃代码的语义精判、把自然语言变成参数化规则。
+
+v0.4.1 起 harness 内核已落地：微内核 + 工具注册中心 + 事件总线、8 个根目录限定的只读工具（调用图 / 读文件 / 正则搜索 / 规则目录与试跑 / 接口链路）、证据强制的 ReAct 循环（为兼容 16+ 家厂商采用文本 JSON 协议；**结论必须引用真实工具调用，判死代码前必须先查调用方，否则结论直接丢弃**）。废弃代码精判为两阶段：批量快判后，仅对模型拿不准的候选让 Agent 主动调工具补证据（每扫描上限 5 个、每个最多 5 步，`DEBTSCOPE_AGENT_REVIEW=0` 可关）。每次扫描都生成 JSONL 运行轨迹（工具调用、token 用量、问题采纳 / 驳回），用 `debtscope runs` 或 `GET /api/runs` 回看。完整设计见 **[docs/harness-architecture.md](docs/harness-architecture.md)**。
 
 ## 快速开始
 
@@ -283,6 +285,8 @@ debtscope config            # 交互式模型 / 端点向导（另有 --show、-
 debtscope doctor            # 检查配置与模型连通性
 debtscope rules             # 列出内置指标与可创建类型
 debtscope endpoints <path>  # 列出 HTTP 入口与链路规模（纯静态，不写库不调模型）
+debtscope runs             # 查看扫描 / Agent 运行轨迹（分数、新增、接口数、耗时）
+debtscope runs <id>        # 查看某次运行的事件流（工具调用、token、采纳/驳回），--json 输出原始 JSON
 ```
 
 ## 路线图
@@ -292,6 +296,7 @@ debtscope endpoints <path>  # 列出 HTTP 入口与链路规模（纯静态，�
 - **v0.3** ✅ 配置前置三步引导、多项目注册表、数据驱动规则引擎、界面指标管理（增 / 改 / 停 / 删 / 重置）、8 类可创建指标、AI 生成规则 + 试跑预览、16 套模型预设
 - **v0.3.1** ✅ 本地服务安全加固（静态目录防穿越、Host 白名单）、AI 精判 JSON 协议统一与容错解析、降级原因可见、端口占用自愈、40 个离线测试、CI
 - **v0.4** ✅ **接口雷达**：Flask / FastAPI / 通用 `@route` 入口发现（蓝图 / 路由双前缀）、跨文件静态调用链（导入解析、DB / HTTP 汇点）、技术债挂链路节点、接口健康分与快照趋势、blast radius 影响面排序、循环内 DB/HTTP（N+1）内置规则、接口列表与 SVG 链路详情页、`debtscope endpoints` CLI
+- **v0.4.1** ✅ **Agent harness 内核**：微内核 + 工具注册中心 + 事件总线、8 个只读工具、证据强制的文本 JSON ReAct 循环、uncertain 候选 Agent 补证据深判、JSONL 运行轨迹（`debtscope runs` / `/api/runs`，含 token 记账）、104 个离线测试
 - **v0.5** — 监控模式：`--watch` 与 git hook、接口级事件流、基线与质量门（只拦新增债务）、Markdown 周报、git blame 责任人
 - **v0.6** — 链路 AI 体检：把结构化链路摘要喂给模型，识别跨函数 N+1、事务边界、缺失鉴权、分页 / 缓存缺失等人和规则都难抓的问题
 - **v0.7** — 语言后端插件缝 + tree-sitter（Go / Java / JS/TS）、CI 无头模式（`--ci`、SARIF 输出、质量门退出码）

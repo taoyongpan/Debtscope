@@ -119,7 +119,9 @@ Dead-code findings are honestly worded as *“no call/reference found by static 
 
 ### Deterministic core, agentic shell
 
-The agent shell (`debtscope.harness`) follows the **Agent = Model + Harness** paradigm: pluggable model adapters, a project registry, tool contracts, and traceable runs — but the built-in rules stay on the deterministic fast path (fast, free, zero-hallucination). Model calls are reserved for what only a model can do: semantic dead-code review and turning natural language into parameterized rules. See **[docs/harness-architecture.md](docs/harness-architecture.md)** for the full blueprint (micro-kernel, tool registry, ReAct loop, session traces, plugin strategy, security model).
+The agent shell (`debtscope.harness`) follows the **Agent = Model + Harness** paradigm: pluggable model adapters, a project registry, tool contracts, and traceable runs — but the built-in rules stay on the deterministic fast path (fast, free, zero-hallucination). Model calls are reserved for what only a model can do: semantic dead-code review and turning natural language into parameterized rules.
+
+Since v0.4.1 the harness kernel is real: a micro-kernel with a tool registry and event bus, 8 root-confined read-only tools (call graph, file reads, regex search, rule catalog/dry-run, endpoint chains), and an evidence-enforced ReAct loop (text-JSON protocol so all 16+ providers work, including local models without native function-calling; **a verdict must cite a real tool call, and a "dead code" verdict requires a caller search first — otherwise it is discarded**). Dead-code review is two-stage: a cheap batch verdict, then an agentic evidence-gathering loop only for `uncertain` candidates (cap: 5 per scan, 5 steps each; disable with `DEBTSCOPE_AGENT_REVIEW=0`). Every scan writes a JSONL run trace (tool calls, token usage, findings accepted/rejected) — review it with `debtscope runs` or `GET /api/runs`. See **[docs/harness-architecture.md](docs/harness-architecture.md)** for the full design.
 
 ## Quickstart
 
@@ -282,6 +284,8 @@ debtscope config          # interactive model/endpoint wizard (also --show, --pr
 debtscope doctor          # check config and model connectivity
 debtscope rules           # list built-in metrics and creatable kinds
 debtscope endpoints <path> # list HTTP entrypoints and chain size (static, no writes/model)
+debtscope runs            # list scan/agent run traces (score, new, endpoints, duration)
+debtscope runs <id>       # event stream of one run (tool calls, tokens, accept/reject); --json for raw JSON
 ```
 
 ## Roadmap
@@ -291,6 +295,7 @@ debtscope endpoints <path> # list HTTP entrypoints and chain size (static, no wr
 - **v0.3** ✅ config-first 3-step onboarding, multi-project registry, data-driven rule engine, UI metric manager (create/edit/disable/delete/reset), 8 creatable metric kinds, AI rule generation with dry-run preview, 16 provider presets
 - **v0.3.1** ✅ local-server hardening (static-dir traversal blocked, Host allow-list), unified AI review JSON protocol with tolerant parsing, visible degradation reasons, port self-healing, 40 offline tests, CI
 - **v0.4** ✅ **Interface Radar**: Flask / FastAPI / generic `@route` discovery (blueprint/router double prefixes), cross-file static call chains (import resolution, DB/HTTP sinks), findings attached to chain nodes, per-endpoint health scores & snapshot trends, blast-radius ordering, in-loop DB/HTTP (N+1) built-in rule, endpoint list & SVG chain detail pages, `debtscope endpoints` CLI
+- **v0.4.1** ✅ **agent harness kernel**: micro-kernel + tool registry + event bus, 8 read-only tools, evidence-enforced text-JSON ReAct loop, agentic evidence gathering for uncertain candidates, JSONL run traces (`debtscope runs` / `/api/runs`, token accounting), 104 offline tests
 - **v0.5** — monitoring mode: `--watch` & git hooks, endpoint-level event stream, baselines & quality gates (block only new debt), Markdown weekly reports, git-blame owners
 - **v0.6** — AI chain checkup: feed structured chain summaries to the model to catch cross-function N+1, transaction boundaries, missing auth, pagination / caching gaps
 - **v0.7** — language-backend plugin seam + tree-sitter (Go / Java / JS/TS), CI headless mode (`--ci`, SARIF output, quality-gate exit codes)

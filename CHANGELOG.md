@@ -3,6 +3,24 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.1] - 2026-09-18
+
+### 新增 — Agent harness 内核落地（Every run is traceable）
+
+- **微内核 + 工具注册中心**（`harness/kernel.py`）：`Tool` 声明式工具契约（JSON Schema 入参、必填/类型校验）、`Kernel` 工具注册与调用、最小事件总线（`tool.call` / `tool.result` / `tool.error`，监听器异常隔离）、写工具开关（`allow_writes`，默认拒绝）、`safe_join` 基于 realpath 的仓库根 containment 防护（绝对路径与 `../` 穿越一律拒绝）。
+- **8 个只读工具**（`harness/tools.py`）：`codegraph.symbols` / `codegraph.callers`（空调用方即废弃核心证据）/ `codegraph.callees` / `read_file` / `grep` / `rules.catalog` / `rule.preview`（参数按 schema 强类型转换、试跑不落库）/ `endpoint.chain`（接口链路 + 汇点 + 影响面 + 节点技术债）；确定性管线不经过内核，Agent 无法绕过结构检查。
+- **证据强制的 ReAct loop**（`harness/agent.py`）：为兼容 16+ 家 OpenAI 兼容厂商（含不支持 function-calling 的本地小模型）采用文本 JSON 协议；最终结论必须引用本轮真实调用成功的工具，否则打回补证据（最多 2 次纠正，仍不合规则返回 `incomplete`）；判 dead 前架构强制要求先 `codegraph.callers`/`grep` 取证，无证据的删除结论直接拒绝。
+- **两阶段废弃代码精判**（`core/reviewer.py`）：批量快判后，仅对 `uncertain` 候选启动 Agent 工具取证（每扫描上限 5 个、每个最多 5 步），结论写回台账并标注 `[agent]`；`DEBTSCOPE_AGENT_REVIEW=0` 可关闭深判；批量失败降级时不进入 Agent。
+- **JSONL 运行轨迹**（`harness/trace.py`）：每次扫描落一条 run（`run.start` → `tool.*` / `llm.call`（含 token 数）/ `finding.accepted|rejected` → `run.end`），run id 为 `时间戳-随机`；Web 模式落 `~/.debtscope/runs/`，CLI 本地扫描落项目 `.debtscope/runs/`。
+- **CLI**：新增 `debtscope runs`（合并展示全局与当前项目两处记录：分数/新增/解决/接口数/耗时）与 `debtscope runs <id> [--json]`（事件流，run id 严格白名单防穿越，支持 `--base` 指定目录）。
+- **Web API**：`GET /api/runs` 与 `GET /api/runs/<id>` 只读查询运行轨迹。
+- `LLMClient` 新增 `chat_json`（返回内容 + token usage），批量精判、规则生成、Agent 调用全部计入 trace。
+
+### 变更
+
+- `scan_repo` 新增 `mode`（headless/web）与 `project_id` 参数，扫描摘要新增 `trace_id` 与 `agent_reviewed/agent_dead/agent_entry` 统计；扫描异常也会记录 `run.error`。
+- 测试套件 56 → 104：新增内核 14 例（注册/校验/写保护/事件/路径穿越）、trace 9 例（落盘/汇总/防穿越/异常上下文/截断）、工具 16 例（在 demo 工程上覆盖全部 8 个工具）、Agent 与 reviewer 集成 9 例（正常取证、证据缺失打回、无调用方证据拒绝、未知工具纠正、步数耗尽、LLM 异常、环境变量关闭深判）。
+
 ## [0.4.0] - 2026-09-18
 
 ### 新增 — 接口雷达（代码维度的静态监控）

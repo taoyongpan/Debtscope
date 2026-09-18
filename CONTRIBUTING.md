@@ -33,6 +33,10 @@ python -m unittest discover -s tests -v
 - `tests/test_llm_parse.py`：模型协议解析与失败兜底（mock，不联网）
 - `tests/test_web_api.py`：本地 HTTP API、安全校验、指标生命周期、接口雷达 API
 - `tests/test_config_presets.py`：模型预设与配置文件读写
+- `tests/test_harness_kernel.py`：工具注册 / 入参校验 / 写保护 / 事件总线 / 路径穿越防护
+- `tests/test_harness_tools.py`：8 个只读工具在 demo 工程上的行为与越界拒绝
+- `tests/test_harness_trace.py`：JSONL 落盘 / 汇总 / 防穿越 / 异常上下文 / 大参数截断
+- `tests/test_harness_agent.py`：ReAct 正常取证、证据缺失打回、无调用方证据拒绝、未知工具纠正、步数耗尽、LLM 异常、reviewer 两阶段集成与开关
 
 提交前请确保：测试全绿、`python -m compileall -q debtscope` 无错。
 
@@ -45,16 +49,20 @@ debtscope/
     callgraph.py        # L1：静态调用图（导入解析、调用边、DB/HTTP 汇点、BFS 链路、影响面）
     endpoints.py        # L1：HTTP 入口发现（Flask / FastAPI / 通用 @route、前缀拼接）
     rules.py            # L2：数据驱动的确定性规则引擎（检测器注册表）
-    reviewer.py         # L3：仅对「疑似废弃函数」做 LLM 精判
-    llm.py              #    OpenAI 兼容客户端（stdlib urllib）
+    reviewer.py         # L3：批量快判 + uncertain 候选的 Agent 补证据深判（两阶段）
+    llm.py              #    OpenAI 兼容客户端（stdlib urllib，chat_json 带 token 用量）
     storage.py          #    SQLite：问题台账 / 快照 / 规则 / 反馈 / 接口与接口快照
     health.py           #    透明加权扣分的健康分
-    scanner.py          # 编排：索引 → 入口/调用图 → 规则 → 精判 → 对账 → 快照
+    scanner.py          # 编排：索引 → 入口/调用图 → 规则 → 精判 → 对账 → 快照（贯穿 run trace）
   harness/
+    kernel.py           # 微内核：Tool 契约 / 注册中心 / 事件总线 / 写保护 / safe_join 路径防护
+    tools.py            # 8 个只读工具（调用图、读文件、grep、规则目录/试跑、接口链路）
+    agent.py            # 文本 JSON ReAct loop、证据强制校验、废弃代码调查任务
+    trace.py            # JSONL run 记录器（NullTracer / RunRecorder / list_runs / read_run）
     config_store.py     # 模型预设与 ~/.debtscope/config.json（权限 600）
     projects.py         # 多项目注册表
   web/                  # stdlib http.server + 原生 JS 看板（无构建步骤，SVG 手写）
-  cli.py                # scan / serve / endpoints / rules / config / doctor
+  cli.py                # scan / serve / endpoints / runs / rules / config / doctor
 ```
 
 ## 新增一个确定性检测器

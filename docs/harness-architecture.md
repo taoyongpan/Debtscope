@@ -55,23 +55,25 @@ dsh 的公式是 **Agent = Model + Harness**：模型负责推理，Harness 负�
 
 ## 3. 工具契约（Tool Contract）
 
-Agent 不直接 import 内核函数，只通过声明了 JSON Schema 的工具拿证据。首批工具：
+Agent 不直接 import 内核函数，只通过声明了 JSON Schema 的工具拿证据。v0.4.1 已注册 8 个只读工具（`debtscope/harness/tools.py`）：
 
 | 工具 | 入参（摘要） | 返回 | 只读 |
 |---|---|---|---|
-| `codegraph.symbols` | path 前缀、kind | 符号列表（名、位置、装饰器、行数） | ✅ |
-| `codegraph.callers` | symbol | 全部调用方/引用位置（空数组 = 废弃证据） | ✅ |
-| `codegraph.callees` | symbol | 被调用方 | ✅ |
-| `read_file` | file、start、end | 带行号代码片段（路径限定仓库根） | ✅ |
-| `grep` | regex、glob | 命中位置 | ✅ |
-| `rules.catalog` | — | 内置规则与 DSL 说明 + few-shot | ✅ |
-| `rule.preview` | DSL | 试跑命中数量与样例（不落库） | ✅ |
-| `rule.install` | DSL、名称、严重度 | 持久化自定义规则 | ❌（写，需用户在回显页确认） |
-| `findings.llm_review` | finding id 集合 | dead / entry / uncertain + 理由 | ✅ |
+| `codegraph.symbols` | prefix、kind、file、limit | 符号列表（key、位置、装饰器、行数、参数数） | ✅ |
+| `codegraph.callers` | symbol（短名或 Class.method） | 全部静态调用方与行号（空数组 = 废弃核心证据） | ✅ |
+| `codegraph.callees` | symbol | 被调用方与 DB/HTTP 汇点标记 | ✅ |
+| `read_file` | file、start、end | 带行号代码片段（realpath 限定仓库根，越界即拒） | ✅ |
+| `grep` | pattern（正则）、glob、limit | 命中文件/行号/文本（自动跳过 .git/__pycache__ 等） | ✅ |
+| `rules.catalog` | — | 内置规则、可创建指标类型（kind/参数/默认严重度） | ✅ |
+| `rule.preview` | kind、params、severity | 试跑命中数量与样例（不落库，参数按 schema 强类型转换） | ✅ |
+| `endpoint.chain` | method、path | 接口静态调用链：节点、DB/HTTP 汇点、影响面、节点技术债 | ✅ |
 
-关键约束：
-- 工具返回值自带 `file/line/snippet`，Agent 的结论 JSON 必须引用工具调用 id，**无工具证据的结论在 kernel 校验阶段直接丢弃**。
-- `rule.preview` 强制在 `rule.install` 之前调用——对应产品设计里的"规则回显确认"，防止自然语言误解直接污染看板。
+协议说明：考虑到要兼容 16+ 家 OpenAI 兼容厂商（含不支持原生 function-calling 的本地小模型），Agent 与模型之间采用**文本 JSON 协议**（每轮输出 `{"thought","action","args"}` 或 `{"thought","final"}`），而非某一家的 tools API。
+
+关键约束（在 loop 与 kernel 中强制，而非只写进 prompt）：
+- 最终结论的 `evidence` 必须引用**本轮真实调用成功**的工具名，否则 loop 打回补证据（最多 2 次纠正，仍不合规则返回 `incomplete`，该候选保持中置信，绝不写入高置信结论）。
+- 判 `dead`（建议删除）前必须调用过 `codegraph.callers` 或 `grep`——只读过代码片段不构成删除证据，由 `dead_code_validator` 架构级拦截。
+- v1 全部工具只读且根目录限定；写工具（如未来的 `rule.install`）在 `allow_writes=False` 时由 kernel 直接拒绝，且必须配合产品侧的"试跑回显确认"，防止自然语言误解直接污染台账。
 
 ## 4. Agent Loop 的两个使用场景
 
@@ -81,14 +83,15 @@ Agent 不直接 import 内核函数，只通过声明了 JSON Schema 的工具�
    完整形态：`理解需求 → rules.catalog 参考 → 生成 DSL → rule.preview 试跑 →（必要时读样例代码自我修正）→ 回显给用户 → rule.install`。
    **v0.3 已落地单步形态**：一次 LLM 调用把自然语言编译为参数化规则（`{kind, severity, params}`，kind 取自 12 类确定性检测器注册表），必须先对当前索引试跑预览（命中数 + 样例）才能保存。多轮 ReAct 自我修正（读样例代码、调整阈值后重试）留待 v0.4。
    产出物始终是**确定性的规则规格**，之后每次扫描都不再调用模型——一次 agentic，长期确定性。
-2. **废弃代码语义精判（v0.1 已具备雏形）**
-   粗筛候选 → 批量 LLM 判定 dead/entry/uncertain。harness 化后改为工具式：Agent 对模糊候选可主动 `codegraph.callers` / `read_file` 补证据再下判，而不是只看单函数片段。
+2. **废弃代码语义精判（v0.4.1 已 harness 化，两阶段）**
+   阶段一：粗筛候选 → 批量 LLM 快判 dead/entry/uncertain（便宜、一次调用）。
+   阶段二：仅对快判为 `uncertain` 的候选（每次扫描上限 5 个、每个最多 5 步）启动 Agent，让它主动 `codegraph.callers` → `grep` → `read_file` 补证据后再下判；`dead` 结论没有调用方证据会被 loop 直接拒绝。环境变量 `DEBTSCOPE_AGENT_REVIEW=0` 可关闭阶段二，退回纯批量快判。
 
 其余一切（扫描、计数、分级、环比、渲染）不进 loop。
 
 ## 5. Session / Trace（Every run is traceable）
 
-`~/.debtscope/runs/<ts>-<short>.jsonl`，每行一个事件：
+run id 为 `YYYYMMDD-HHMMSS-<6hex>`。Web 多项目模式下落 `~/.debtscope/runs/`，CLI 本地扫描（db 在项目 `.debtscope/`）下落 `<项目>/.debtscope/runs/`；`debtscope runs` 默认合并展示两处，`debtscope runs <id>` 查看事件流（也可 `--json`），Web 端对应只读接口 `GET /api/runs` 与 `GET /api/runs/<id>`。每行一个事件：
 
 ```json
 {"ts":"...","type":"run.start","repo":"...","commit":"...","mode":"headless"}
@@ -121,9 +124,10 @@ Agent 不直接 import 内核函数，只通过声明了 JSON Schema 的工具�
 |---|---|---|
 | v0.1 | 确定性五层管线、7 规则、SQLite 台账、Web 看板、静态/LLM 精判 | ✅ |
 | v0.2 | 模型配置向导（CLI + Web）、provider 适配、连接测试、`debtscope.harness` 包 | ✅ |
-| v0.3 | 配置前置三态引导（连接模型→选择项目→初始化监控）、多项目注册表与每项目独立台账、数据驱动规则引擎（12 类检测器）、指标管理 UI（增删改/启停/重置）、AI 生成指标 + 试跑预览、取消无模型默认态 | ✅ |
-| v0.4 | micro-kernel + tool registry + 多步 ReAct loop（规则生成自我修正、Agent 式补证据精判）、trace JSONL 与运行记录页 |
-| v0.5 | 语言后端插件口（tree-sitter 试点第二语言）、规则 DSL 文件化与 rule pack、成本/token 看板 |
+| v0.3 | 配置前置三态引导（连接模型→选择项目→初始化监控）、多项目注册表与每项目独立台账、数据驱动规则引擎（检测器注册表）、指标管理 UI（增删改/启停/重置）、AI 生成指标 + 试跑预览、取消无模型默认态 | ✅ |
+| v0.4 | 接口雷达：Flask/FastAPI/通用 @route 入口发现、跨文件静态调用图、接口调用链 DAG、DB/HTTP 汇点、影响面（blast radius）、N+1 内置规则、链路详情页 | ✅ |
+| v0.4.1 | harness 内核落地：micro-kernel + tool registry + 事件总线、8 个只读工具、证据强制的文本 JSON ReAct loop、uncertain 候选 Agent 补证据深判、JSONL run trace（CLI `debtscope runs` + `/api/runs`） | ✅ |
+| v0.5 | 语言后端插件口（tree-sitter 试点第二语言）、规则 DSL 文件化与 rule pack、规则生成的多轮 ReAct 自我修正、成本/token 看板、Web 运行记录页 |
 | v0.6 | CI headless 模式（`debtscope scan --ci` 输出 JSON/SARIF、退出码门禁）、多仓分组与聚合 rollup |
 | later | 自动修复（写工具 + diff 确认）、dsh 生态 bundle（`dsh-plugin-debtscope`）评估 |
 

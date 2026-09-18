@@ -147,6 +147,10 @@ def build_handler(registry, initial_pid: str | None = None):
                     return self._config_get()
                 if route == "/api/projects":
                     return self._projects()
+                if route == "/api/runs":
+                    return self._runs_list()
+                if route.startswith("/api/runs/"):
+                    return self._run_detail(route.rsplit("/", 1)[-1])
                 if route.startswith("/api/projects/"):
                     return self._project_get(route, qs)
                 self.send_error(404)
@@ -396,12 +400,30 @@ def build_handler(registry, initial_pid: str | None = None):
             try:
                 cfg = Config.load()
                 summary = scan_repo(project.path, registry.db_path(project.id),
-                                    use_llm=cfg.llm_enabled)
+                                    use_llm=cfg.llm_enabled, mode="web",
+                                    project_id=project.id)
                 registry.update_summary(project.id, summary)
                 index_cache.pop(project.id, None)
                 return summary
             finally:
                 lock_for(project.id).release()
+
+        # -- run traces ------------------------------------------------------
+
+        def _runs_list(self):
+            from ..harness.trace import RunRecorder
+            runs = RunRecorder.list_runs(getattr(registry, "base", None), limit=50)
+            self._json({"runs": runs})
+
+        def _run_detail(self, run_id):
+            from ..harness.trace import RunRecorder
+            try:
+                events = RunRecorder.read_run(
+                    run_id, getattr(registry, "base", None))
+            except FileNotFoundError:
+                self._json({"error": "run not found"}, status=404)
+                return
+            self._json({"id": run_id, "events": events})
 
         # -- dashboard data --------------------------------------------------
 
