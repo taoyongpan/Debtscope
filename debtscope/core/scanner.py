@@ -60,8 +60,9 @@ def scan_repo(root: str, db_path: str, use_llm: bool = True, *,
                  llm_enabled=cfg.llm_enabled, model=cfg.model if cfg.llm_enabled else "",
                  files=len(idx.files))
 
-    store = Storage(db_path)
+    store = None
     try:
+        store = Storage(db_path)
         store.seed_rules()
         specs = [RuleSpec.from_dict(r) for r in store.list_rules()]
         candidates = run_rules(idx, specs)
@@ -122,7 +123,8 @@ def scan_repo(root: str, db_path: str, use_llm: bool = True, *,
         tracer.end(status="error")
         raise
     finally:
-        store.close()
+        if store is not None:
+            store.close()
         tracer.close()
 
     return {
